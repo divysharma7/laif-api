@@ -1,4 +1,5 @@
 import { google, calendar_v3 } from 'googleapis'
+import { randomUUID } from 'node:crypto'
 import { config } from '../config.js'
 import { NotFoundError } from '../lib/errors.js'
 import { logger } from '../lib/logger.js'
@@ -397,9 +398,14 @@ export async function syncGoogleAccount(
 ): Promise<GoogleCalendarSyncResult> {
   const prisma = getPrisma()
   const result = emptyResult('syncing')
+  const syncId = randomUUID()
+  const startTime = Date.now()
   const staleLockThreshold = new Date(
     Date.now() - LOCK_STALE_AFTER_MINUTES * 60 * 1000,
   )
+
+  logger.info({ syncId, userId, accountId }, 'Google sync started')
+
   const lock = await prisma.calendarAccount.updateMany({
     where: {
       id: accountId,
@@ -429,6 +435,7 @@ export async function syncGoogleAccount(
       select: { id: true },
     })
     if (!existingAccount) throw new NotFoundError('Calendar account', accountId)
+    logger.info({ syncId, userId, accountId }, 'Google sync skipped — already running')
     return { ...result, alreadyRunning: true }
   }
 
@@ -454,6 +461,8 @@ export async function syncGoogleAccount(
     const calendars = await discoverCalendars(userId, accountId, api)
     result.calendarsDiscovered = calendars.length
 
+    logger.info({ syncId, userId, accountId, calendarsDiscovered: calendars.length }, 'Google sync: calendars discovered')
+
     for (const calendar of calendars) {
       try {
         await pullCalendarEvents(userId, accountId, calendar, api, result)
@@ -463,12 +472,13 @@ export async function syncGoogleAccount(
         const message = errorMessage(error)
         result.failures.push(`${calendar.providerCalendarId}: ${message}`)
         logger.warn(
-          { error, userId, accountId, calendarId: calendar.providerCalendarId },
-          'Google calendar sync failed for one calendar',
+          { syncId, userId, accountId, calendarId: calendar.providerCalendarId, error: message },
+          'Google sync: calendar failed',
         )
       }
     }
 
+    const durationMs = Date.now() - startTime
     result.state = result.failures.length === 0 ? 'healthy' : 'delayed'
     await prisma.calendarAccount.update({
       where: { id: accountId },
@@ -481,11 +491,37 @@ export async function syncGoogleAccount(
           : {}),
       },
     })
+
+    logger.info({
+      syncId,
+      userId,
+      accountId,
+      durationMs,
+      state: result.state,
+      calendarsDiscovered: result.calendarsDiscovered,
+      calendarsSynced: result.calendarsSynced,
+      eventsUpserted: result.eventsUpserted,
+      eventsDeleted: result.eventsDeleted,
+      failures: result.failures.length,
+    }, 'Google sync completed')
+
     return result
   } catch (error) {
+    const durationMs = Date.now() - startTime
     const reconnectRequired = isReconnectError(error)
     result.state = reconnectRequired ? 'needs_attention' : 'delayed'
     result.failures.push(errorMessage(error))
+
+    logger.error({
+      syncId,
+      userId,
+      accountId,
+      durationMs,
+      state: result.state,
+      reconnectRequired,
+      error: errorMessage(error),
+    }, 'Google sync failed')
+
     await prisma.calendarAccount.update({
       where: { id: accountId },
       data: {

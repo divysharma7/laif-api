@@ -24,6 +24,41 @@ export function createApp() {
 
   // ── Health check ──
   app.get('/health', (_req, res) => { res.json({ status: 'ok' }) })
+
+  // ── Readiness check (includes sync status) ──
+  app.get('/ready', async (_req, res) => {
+    try {
+      const { getPrisma } = await import('./lib/prisma.js')
+      const prisma = getPrisma()
+
+      // Check database connectivity
+      await prisma.$queryRaw`SELECT 1`
+
+      // Get sync health summary
+      const accounts = await prisma.calendarAccount.findMany({
+        where: { disconnectedAt: null },
+        select: { status: true, reconnectRequired: true },
+      })
+
+      const healthy = accounts.filter(a => a.status === 'healthy' && !a.reconnectRequired).length
+      const delayed = accounts.filter(a => a.status === 'delayed').length
+      const needsAttention = accounts.filter(a => a.status === 'needs_attention' || a.reconnectRequired).length
+
+      res.json({
+        status: 'ok',
+        database: 'connected',
+        sync: {
+          total: accounts.length,
+          healthy,
+          delayed,
+          needsAttention,
+        },
+      })
+    } catch {
+      res.status(503).json({ status: 'error', database: 'disconnected' })
+    }
+  })
+
   app.use(authMiddleware)
 
   // ── Routes (mounted at /api and /api/v1 for backward compat) ──
