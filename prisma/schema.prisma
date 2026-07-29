@@ -541,6 +541,8 @@ model ExternalCalendarEvent {
   start            DateTime               @db.Timestamptz(3)
   end              DateTime               @db.Timestamptz(3)
   allDay           Boolean                @default(false) @map("all_day")
+  visibility       String                 @default("public") @db.Text
+  transparency     String                 @default("opaque") @db.Text
   lastSyncedAt     DateTime               @default(now()) @map("last_synced_at") @db.Timestamptz(3)
   calendarId       String                 @default("primary") @map("calendar_id") @db.Text
   accountId        String?                @map("account_id") @db.Text

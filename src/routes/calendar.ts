@@ -312,10 +312,23 @@ router.get('/agenda', async (req: Request, res: Response, next: NextFunction) =>
       .filter((item): item is AgendaItem => item !== null)
     const externalItems: AgendaItem[] = externalEvents.flatMap(event => {
       if (!event.calendar) return []
+
+      // Handle private events — always show as "Busy"
+      const isPrivate = event.visibility === 'private' || event.visibility === 'confidential'
+      const title = isPrivate ? 'Busy' : event.title
+
+      // Handle transparency — transparent events are free, not busy
+      const isTransparent = event.transparency === 'transparent'
+      const availability = isTransparent ? 'free' : (event.calendar.affectsAvailability ? 'busy' : 'free')
+
+      // Handle exclusive all-day end dates — Google uses exclusive end dates
+      // For display, we keep the exclusive end as-is (the frontend handles rendering)
+      // For bounds checking, the existing query already handles this correctly
+
       return [{
         id: event.id,
         kind: 'external_event',
-        title: event.title,
+        title,
         start: event.start.toISOString(),
         end: event.end.toISOString(),
         allDay: event.allDay,
@@ -324,9 +337,9 @@ router.get('/agenda', async (req: Request, res: Response, next: NextFunction) =>
           type: 'google',
           accountId: event.accountId,
           calendarId: event.calendarId,
-          displayName: event.calendar.name,
+          displayName: isPrivate ? undefined : event.calendar.name,
         },
-        availability: event.calendar.affectsAvailability ? 'busy' : 'free',
+        availability,
         color: event.calendar.colorOverride || event.calendar.providerColor || '#4285f4',
         actions: ['view'],
       }]

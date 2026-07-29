@@ -294,11 +294,21 @@ async function applyEvent(
   const end = parseEventBoundary(event.end)
   if (!start || !end || end.value <= start.value) return
   const syncedAt = new Date()
+
+  // Handle private events — hide title
+  const isPrivate = event.visibility === 'private' || event.visibility === 'confidential'
+  const title = isPrivate ? 'Busy' : (event.summary || 'Busy')
+
+  // Handle transparency — 'transparent' means free, 'opaque' means busy
+  const transparency = event.transparency === 'transparent' ? 'transparent' : 'opaque'
+
   const eventData = {
-    title: event.summary || 'Busy',
+    title,
     start: start.value,
     end: end.value,
     allDay: start.allDay,
+    visibility: event.visibility || 'public',
+    transparency,
     lastSyncedAt: syncedAt,
     calendarRecordId: calendar.id,
   }

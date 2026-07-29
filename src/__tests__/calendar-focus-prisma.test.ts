@@ -898,4 +898,207 @@ describe('calendar and focus Prisma routes', () => {
       eventsUpserted: 4,
     })
   })
+
+  // ── LOS-404: Calendar semantic correctness ─────────────────────
+
+  it('hides private event titles and shows "Busy" instead', async () => {
+    prisma.user.findUnique.mockResolvedValue({ timezone: 'Asia/Calcutta' })
+    prisma.task.findMany
+      .mockResolvedValueOnce([]) // scheduled tasks
+      .mockResolvedValueOnce([]) // unscheduled tasks
+    prisma.focusSession.findMany.mockResolvedValue([])
+    prisma.externalCalendarEvent.findMany.mockResolvedValue([{
+      id: 'ext-private-1',
+      title: 'Doctor Appointment', // Original title — should be hidden
+      start: new Date('2026-07-29T10:00:00.000Z'),
+      end: new Date('2026-07-29T11:00:00.000Z'),
+      allDay: false,
+      visibility: 'private',
+      transparency: 'opaque',
+      calendarId: 'primary',
+      accountId: 'acc-1',
+      calendar: {
+        name: 'Personal',
+        providerColor: '#4285f4',
+        colorOverride: null,
+        affectsAvailability: true,
+      },
+    }])
+    prisma.calendarAccount.findFirst.mockResolvedValue(null)
+
+    const response = await request(createApp())
+      .get('/api/calendar/agenda?date=2026-07-29&timeZone=Asia%2FCalcutta')
+      .set('Authorization', authorization)
+      .expect(200)
+
+    const privateItem = response.body.items.find((i: { id: string }) => i.id === 'ext-private-1')
+    expect(privateItem.title).toBe('Busy')
+    expect(privateItem.source.displayName).toBeUndefined()
+  })
+
+  it('marks transparent events as free availability', async () => {
+    prisma.user.findUnique.mockResolvedValue({ timezone: 'Asia/Calcutta' })
+    prisma.task.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+    prisma.focusSession.findMany.mockResolvedValue([])
+    prisma.externalCalendarEvent.findMany.mockResolvedValue([{
+      id: 'ext-free-1',
+      title: 'Focus Time',
+      start: new Date('2026-07-29T14:00:00.000Z'),
+      end: new Date('2026-07-29T16:00:00.000Z'),
+      allDay: false,
+      visibility: 'public',
+      transparency: 'transparent',
+      calendarId: 'primary',
+      accountId: 'acc-1',
+      calendar: {
+        name: 'Work',
+        providerColor: '#4285f4',
+        colorOverride: null,
+        affectsAvailability: true,
+      },
+    }])
+    prisma.calendarAccount.findFirst.mockResolvedValue(null)
+
+    const response = await request(createApp())
+      .get('/api/calendar/agenda?date=2026-07-29&timeZone=Asia%2FCalcutta')
+      .set('Authorization', authorization)
+      .expect(200)
+
+    const freeItem = response.body.items.find((i: { id: string }) => i.id === 'ext-free-1')
+    expect(freeItem.availability).toBe('free')
+  })
+
+  it('marks opaque events as busy when calendar affects availability', async () => {
+    prisma.user.findUnique.mockResolvedValue({ timezone: 'Asia/Calcutta' })
+    prisma.task.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+    prisma.focusSession.findMany.mockResolvedValue([])
+    prisma.externalCalendarEvent.findMany.mockResolvedValue([{
+      id: 'ext-busy-1',
+      title: 'Design Review',
+      start: new Date('2026-07-29T14:00:00.000Z'),
+      end: new Date('2026-07-29T15:00:00.000Z'),
+      allDay: false,
+      visibility: 'public',
+      transparency: 'opaque',
+      calendarId: 'primary',
+      accountId: 'acc-1',
+      calendar: {
+        name: 'Work',
+        providerColor: '#4285f4',
+        colorOverride: null,
+        affectsAvailability: true,
+      },
+    }])
+    prisma.calendarAccount.findFirst.mockResolvedValue(null)
+
+    const response = await request(createApp())
+      .get('/api/calendar/agenda?date=2026-07-29&timeZone=Asia%2FCalcutta')
+      .set('Authorization', authorization)
+      .expect(200)
+
+    const busyItem = response.body.items.find((i: { id: string }) => i.id === 'ext-busy-1')
+    expect(busyItem.availability).toBe('busy')
+  })
+
+  it('preserves all-day events with exclusive end dates', async () => {
+    prisma.user.findUnique.mockResolvedValue({ timezone: 'Asia/Calcutta' })
+    prisma.task.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+    prisma.focusSession.findMany.mockResolvedValue([])
+    prisma.externalCalendarEvent.findMany.mockResolvedValue([{
+      id: 'ext-allday-1',
+      title: 'Company Holiday',
+      start: new Date('2026-07-29T00:00:00.000Z'),
+      end: new Date('2026-07-30T00:00:00.000Z'), // Exclusive end date
+      allDay: true,
+      visibility: 'public',
+      transparency: 'opaque',
+      calendarId: 'primary',
+      accountId: 'acc-1',
+      calendar: {
+        name: 'Work',
+        providerColor: '#4285f4',
+        colorOverride: null,
+        affectsAvailability: false,
+      },
+    }])
+    prisma.calendarAccount.findFirst.mockResolvedValue(null)
+
+    const response = await request(createApp())
+      .get('/api/calendar/agenda?date=2026-07-29&timeZone=Asia%2FCalcutta')
+      .set('Authorization', authorization)
+      .expect(200)
+
+    const allDayItem = response.body.items.find((i: { id: string }) => i.id === 'ext-allday-1')
+    expect(allDayItem.allDay).toBe(true)
+    expect(allDayItem.start).toBe('2026-07-29T00:00:00.000Z')
+    expect(allDayItem.end).toBe('2026-07-30T00:00:00.000Z')
+  })
+
+  it('does not leak cross-user events in agenda', async () => {
+    prisma.user.findUnique.mockResolvedValue({ timezone: 'UTC' })
+    prisma.task.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+    prisma.focusSession.findMany.mockResolvedValue([])
+    prisma.externalCalendarEvent.findMany.mockResolvedValue([])
+    prisma.calendarAccount.findFirst.mockResolvedValue(null)
+
+    // The Prisma query includes userId: 'owner-123' — cross-user events are filtered at DB level
+    const response = await request(createApp())
+      .get('/api/calendar/agenda?date=2026-07-29&timeZone=UTC')
+      .set('Authorization', authorization)
+      .expect(200)
+
+    expect(response.body.items).toEqual([])
+    expect(response.body.unscheduledPriorities).toEqual([])
+
+    // Verify the Prisma query was scoped to the authenticated user
+    expect(prisma.externalCalendarEvent.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ userId: 'owner-123' }),
+      }),
+    )
+  })
+
+  it('orders agenda items deterministically: all-day first, then by start, end, kind, id', async () => {
+    prisma.user.findUnique.mockResolvedValue({ timezone: 'UTC' })
+    prisma.task.findMany
+      .mockResolvedValueOnce([
+        { id: 'task-b', title: 'Task B', scheduledStart: new Date('2026-07-29T10:00:00Z'), scheduledEnd: new Date('2026-07-29T11:00:00Z'), estimatedEffort: null, dueDate: null, priority: 'medium', status: 'todo', color: '#34d399', isHabit: false, completions: [] },
+        { id: 'task-a', title: 'Task A', scheduledStart: new Date('2026-07-29T09:00:00Z'), scheduledEnd: new Date('2026-07-29T10:00:00Z'), estimatedEffort: null, dueDate: null, priority: 'high', status: 'todo', color: '#ef4444', isHabit: false, completions: [] },
+      ])
+      .mockResolvedValueOnce([])
+    prisma.focusSession.findMany.mockResolvedValue([])
+    prisma.externalCalendarEvent.findMany.mockResolvedValue([{
+      id: 'ext-allday',
+      title: 'Holiday',
+      start: new Date('2026-07-29T00:00:00Z'),
+      end: new Date('2026-07-30T00:00:00Z'),
+      allDay: true,
+      visibility: 'public',
+      transparency: 'opaque',
+      calendarId: 'primary',
+      accountId: 'acc-1',
+      calendar: { name: 'Work', providerColor: '#4285f4', colorOverride: null, affectsAvailability: false },
+    }])
+    prisma.calendarAccount.findFirst.mockResolvedValue(null)
+
+    const response = await request(createApp())
+      .get('/api/calendar/agenda?date=2026-07-29&timeZone=UTC')
+      .set('Authorization', authorization)
+      .expect(200)
+
+    const ids = response.body.items.map((i: { id: string }) => i.id)
+    // All-day first
+    expect(ids[0]).toBe('ext-allday')
+    // Then by start time
+    expect(ids[1]).toBe('task-a') // 09:00
+    expect(ids[2]).toBe('task-b') // 10:00
+  })
 })
