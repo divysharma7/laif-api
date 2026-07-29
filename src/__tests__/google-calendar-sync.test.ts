@@ -17,6 +17,10 @@ const prisma = vi.hoisted(() => ({
     upsert: vi.fn(),
     deleteMany: vi.fn(),
   },
+  task: {
+    findFirst: vi.fn(),
+    update: vi.fn(),
+  },
 }))
 
 const googleAuth = vi.hoisted(() => ({
@@ -27,6 +31,9 @@ const googleAuth = vi.hoisted(() => ({
 const googleCalendar = vi.hoisted(() => ({
   calendarList: vi.fn(),
   events: vi.fn(),
+  eventsInsert: vi.fn(),
+  eventsUpdate: vi.fn(),
+  eventsDelete: vi.fn(),
 }))
 
 vi.mock('../lib/prisma.js', () => ({
@@ -43,7 +50,12 @@ vi.mock('googleapis', () => ({
     },
     calendar: vi.fn(() => ({
       calendarList: { list: googleCalendar.calendarList },
-      events: { list: googleCalendar.events },
+      events: {
+        list: googleCalendar.events,
+        insert: googleCalendar.eventsInsert,
+        update: googleCalendar.eventsUpdate,
+        delete: googleCalendar.eventsDelete,
+      },
     })),
   },
 }))
@@ -56,6 +68,8 @@ process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64')
 const { encryptSecret } = await import('../lib/secretEncryption.js')
 const { syncDueGoogleAccounts, syncGoogleAccount } =
   await import('../services/googleCalendarSync.js')
+const { syncTaskToGoogle, unsyncTaskFromGoogle } =
+  await import('../services/googleCalendarOutboundSync.js')
 
 const encryptedAccess = encryptSecret(
   'stored-access-token',
@@ -322,5 +336,224 @@ describe('Google Calendar inbound sync', () => {
         }),
       }),
     )
+  })
+})
+
+// ── LOS-403: Outbound Google Calendar sync ─────────────────────
+
+describe('Google Calendar outbound sync', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    googleAuth.getAccessToken.mockResolvedValue({ token: 'stored-access-token' })
+    googleCalendar.eventsInsert.mockResolvedValue({ data: { id: 'google-event-123' } })
+    googleCalendar.eventsUpdate.mockResolvedValue({ data: { id: 'google-event-123' } })
+    googleCalendar.eventsDelete.mockResolvedValue({})
+  })
+
+  it('syncs a scheduled task to Google Calendar and stores the event ID', async () => {
+    prisma.task.findFirst.mockResolvedValue({
+      id: 'task-1',
+      title: 'Write API contract',
+      description: 'Draft the LOS-403 contract',
+      scheduledStart: new Date('2026-07-29T10:00:00.000Z'),
+      scheduledEnd: new Date('2026-07-29T11:00:00.000Z'),
+      estimatedEffort: null,
+      status: 'todo',
+      googleEventId: null,
+      calendarSynced: false,
+    })
+    prisma.calendar.findFirst.mockResolvedValue({
+      id: 'calendar-1',
+      providerCalendarId: 'primary',
+      readOnly: false,
+      hidden: false,
+      account: {
+        id: 'account-1',
+        googleAccessToken: encryptedAccess,
+        googleRefreshToken: encryptedRefresh,
+        tokenExpiresAt: new Date('2026-07-29T00:00:00.000Z'),
+      },
+    })
+    prisma.task.update.mockResolvedValue({})
+
+    const result = await syncTaskToGoogle('owner-123', 'task-1')
+
+    expect(result).toEqual({
+      ok: true,
+      googleEventId: 'google-event-123',
+      action: 'created',
+    })
+    expect(googleCalendar.eventsInsert).toHaveBeenCalledWith({
+      calendarId: 'primary',
+      requestBody: expect.objectContaining({
+        summary: 'Write API contract',
+        description: 'Draft the LOS-403 contract',
+      }),
+    })
+    expect(prisma.task.update).toHaveBeenCalledWith({
+      where: { id: 'task-1' },
+      data: {
+        googleEventId: 'google-event-123',
+        calendarSynced: true,
+      },
+    })
+  })
+
+  it('updates an already-synced task instead of creating a duplicate', async () => {
+    prisma.task.findFirst.mockResolvedValue({
+      id: 'task-1',
+      title: 'Write API contract',
+      description: null,
+      scheduledStart: new Date('2026-07-29T10:00:00.000Z'),
+      scheduledEnd: new Date('2026-07-29T11:00:00.000Z'),
+      estimatedEffort: 1,
+      status: 'todo',
+      googleEventId: 'existing-google-event',
+      calendarSynced: true,
+    })
+    prisma.calendar.findFirst.mockResolvedValue({
+      id: 'calendar-1',
+      providerCalendarId: 'primary',
+      readOnly: false,
+      hidden: false,
+      account: {
+        id: 'account-1',
+        googleAccessToken: encryptedAccess,
+        googleRefreshToken: encryptedRefresh,
+        tokenExpiresAt: new Date('2026-07-29T00:00:00.000Z'),
+      },
+    })
+    prisma.task.update.mockResolvedValue({})
+
+    const result = await syncTaskToGoogle('owner-123', 'task-1')
+
+    expect(result).toEqual({
+      ok: true,
+      googleEventId: 'google-event-123',
+      action: 'updated',
+    })
+    expect(googleCalendar.eventsUpdate).toHaveBeenCalledWith({
+      calendarId: 'primary',
+      eventId: 'existing-google-event',
+      requestBody: expect.objectContaining({
+        summary: 'Write API contract',
+      }),
+    })
+    expect(googleCalendar.eventsInsert).not.toHaveBeenCalled()
+  })
+
+  it('rejects syncing an unscheduled task', async () => {
+    prisma.task.findFirst.mockResolvedValue({
+      id: 'task-1',
+      title: 'Write API contract',
+      description: null,
+      scheduledStart: null,
+      scheduledEnd: null,
+      estimatedEffort: null,
+      status: 'todo',
+      googleEventId: null,
+      calendarSynced: false,
+    })
+
+    await expect(syncTaskToGoogle('owner-123', 'task-1'))
+      .rejects.toThrow('Task must be scheduled before syncing')
+  })
+
+  it('rejects syncing when no writable calendar is configured', async () => {
+    prisma.task.findFirst.mockResolvedValue({
+      id: 'task-1',
+      title: 'Write API contract',
+      description: null,
+      scheduledStart: new Date('2026-07-29T10:00:00.000Z'),
+      scheduledEnd: new Date('2026-07-29T11:00:00.000Z'),
+      estimatedEffort: null,
+      status: 'todo',
+      googleEventId: null,
+      calendarSynced: false,
+    })
+    prisma.calendar.findFirst.mockResolvedValue(null)
+
+    await expect(syncTaskToGoogle('owner-123', 'task-1'))
+      .rejects.toThrow('No writable Google Calendar configured')
+  })
+
+  it('rejects syncing another user task', async () => {
+    prisma.task.findFirst.mockResolvedValue(null)
+
+    await expect(syncTaskToGoogle('intruder-456', 'task-1'))
+      .rejects.toMatchObject({ code: 'NOT_FOUND', statusCode: 404 })
+  })
+
+  it('unsyncs a task by unlinking only (keeps Google event)', async () => {
+    prisma.task.findFirst.mockResolvedValue({
+      id: 'task-1',
+      googleEventId: 'google-event-123',
+      calendarSynced: true,
+    })
+    prisma.task.update.mockResolvedValue({})
+
+    const result = await unsyncTaskFromGoogle('owner-123', 'task-1', false)
+
+    expect(result).toEqual({
+      ok: true,
+      action: 'unlinked',
+    })
+    expect(prisma.task.update).toHaveBeenCalledWith({
+      where: { id: 'task-1' },
+      data: {
+        googleEventId: null,
+        calendarSynced: false,
+      },
+    })
+    expect(googleCalendar.eventsDelete).not.toHaveBeenCalled()
+  })
+
+  it('unsyncs a task by deleting the Google event and unlinking', async () => {
+    prisma.task.findFirst.mockResolvedValue({
+      id: 'task-1',
+      googleEventId: 'google-event-123',
+      calendarSynced: true,
+    })
+    prisma.calendar.findFirst.mockResolvedValue({
+      id: 'calendar-1',
+      providerCalendarId: 'primary',
+      readOnly: false,
+      hidden: false,
+      account: {
+        googleAccessToken: encryptedAccess,
+        googleRefreshToken: encryptedRefresh,
+        tokenExpiresAt: new Date('2026-07-29T00:00:00.000Z'),
+      },
+    })
+    prisma.task.update.mockResolvedValue({})
+
+    const result = await unsyncTaskFromGoogle('owner-123', 'task-1', true)
+
+    expect(result).toEqual({
+      ok: true,
+      action: 'deleted_and_unlinked',
+    })
+    expect(googleCalendar.eventsDelete).toHaveBeenCalledWith({
+      calendarId: 'primary',
+      eventId: 'google-event-123',
+    })
+    expect(prisma.task.update).toHaveBeenCalledWith({
+      where: { id: 'task-1' },
+      data: {
+        googleEventId: null,
+        calendarSynced: false,
+      },
+    })
+  })
+
+  it('rejects unsyncing a task that is not synced', async () => {
+    prisma.task.findFirst.mockResolvedValue({
+      id: 'task-1',
+      googleEventId: null,
+      calendarSynced: false,
+    })
+
+    await expect(unsyncTaskFromGoogle('owner-123', 'task-1', false))
+      .rejects.toThrow('Task is not synced to Google Calendar')
   })
 })

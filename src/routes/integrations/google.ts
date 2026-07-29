@@ -6,10 +6,13 @@ import { config } from '../../config.js'
 import { NotFoundError, ValidationError } from '../../lib/errors.js'
 import { encryptSecret } from '../../lib/secretEncryption.js'
 import { syncGoogleAccount } from '../../services/googleCalendarSync.js'
+import { syncTaskToGoogle, unsyncTaskFromGoogle } from '../../services/googleCalendarOutboundSync.js'
 import {
   CalendarInventoryUpdateSchema,
   DisconnectGoogleAccountSchema,
   GoogleCalendarSyncSchema,
+  SyncTaskToGoogleSchema,
+  UnsyncTaskFromGoogleSchema,
   parseBody,
 } from '../../lib/validation.js'
 
@@ -448,9 +451,25 @@ router.post('/sync', async (req: Request, res: Response, next: NextFunction) => 
   } catch (err) { next(err) }
 })
 
-router.post('/unsync', async (_req: Request, res: Response, next: NextFunction) => {
+router.post('/unsync', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json({ ok: true, message: 'Task unsynced from Google Calendar' })
+    const parsed = parseBody(UnsyncTaskFromGoogleSchema, req.body)
+    if (!parsed.success) throw new ValidationError(parsed.error)
+    const result = await unsyncTaskFromGoogle(
+      req.userId!,
+      parsed.data.taskId,
+      parsed.data.deleteGoogleEvent,
+    )
+    res.json(result)
+  } catch (err) { next(err) }
+})
+
+router.post('/sync-task', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = parseBody(SyncTaskToGoogleSchema, req.body)
+    if (!parsed.success) throw new ValidationError(parsed.error)
+    const result = await syncTaskToGoogle(req.userId!, parsed.data.taskId)
+    res.json(result)
   } catch (err) { next(err) }
 })
 

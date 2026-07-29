@@ -25,6 +25,15 @@ export const GoogleCalendarSyncSchema = z.object({
   accountId: z.string().min(1),
 })
 
+export const SyncTaskToGoogleSchema = z.object({
+  taskId: z.string().min(1),
+})
+
+export const UnsyncTaskFromGoogleSchema = z.object({
+  taskId: z.string().min(1),
+  deleteGoogleEvent: z.boolean().default(false),
+})
+
 export const CreateTaskSchema = z.object({
   title: z.string().min(1).max(500),
   priority: z.enum(['low', 'medium', 'high']).optional().nullable(),
