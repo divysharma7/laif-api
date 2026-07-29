@@ -9,13 +9,10 @@ import listRoutes from './lists.js'
 import folderRoutes from './folders.js'
 import workflowRoutes from './workflows.js'
 import kanbanSectionRoutes from './kanbanSections.js'
-import contactRoutes from './contacts.js'
-import noteRoutes from './notes.js'
 import memoryRoutes from './memories.js'
 import reminderRoutes from './reminders.js'
 import listGroupRoutes from './listGroups.js'
 import pomodoroRoutes from './pomodoro.js'
-import journalRoutes from './journal.js'
 import chatRoutes from './chat.js'
 import notificationRoutes from './notifications.js'
 import pushRoutes from './push.js'
@@ -31,7 +28,6 @@ export const routes = Router()
 // Public routes (auth handled internally or not required)
 routes.use('/auth', authRoutes)
 routes.use('/posthook_listener', posthookRoutes)
-routes.use('/devices', deviceRoutes)
 routes.use('/alexa', alexaRoutes)
 
 // Protected routes (auth middleware applied globally in app.ts)
@@ -44,16 +40,14 @@ routes.use('/lists', listRoutes)
 routes.use('/folders', folderRoutes)
 routes.use('/workflows', workflowRoutes)
 routes.use('/kanban-sections', kanbanSectionRoutes)
-routes.use('/contacts', contactRoutes)
-routes.use('/notes', noteRoutes)
 routes.use('/memories', memoryRoutes)
 routes.use('/reminders', reminderRoutes)
 routes.use('/list-groups', listGroupRoutes)
 routes.use('/pomodoro', pomodoroRoutes)
-routes.use('/journal', journalRoutes)
 routes.use('/chat', chatRoutes)
 routes.use('/notifications', notificationRoutes)
 routes.use('/push', pushRoutes)
+routes.use('/devices', deviceRoutes)
 routes.use('/users', userRoutes)
 routes.use('/integrations/google', googleRoutes)
 routes.use('/mcp', mcpRoutes)

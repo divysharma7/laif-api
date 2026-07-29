@@ -196,38 +196,6 @@ export function isDueToday(
  * Returns a grid of 7 * weeks cells with status for display.
  * Each cell: { date: string, dayOfWeek: number, status: string | null }
  */
-export function getWeeklyGrid(
-  habit: HabitLike,
-  weeks: number = 1,
-  timezone: string = 'UTC',
-): Array<{ date: string; dayOfWeek: number; status: string | null }> {
-  const statusMap = new Map<string, string>()
-  for (const c of (habit.completions ?? [])) {
-    statusMap.set(c.date, c.status)
-  }
-
-  const today = todayStr(timezone)
-  const todayDow = getDayOfWeek(today)
-  const totalDays = weeks * 7
-
-  // Start from the beginning of the current week (Sunday)
-  const startDate = addDays(today, -todayDow)
-
-  const grid: Array<{ date: string; dayOfWeek: number; status: string | null }> = []
-
-  // Go backwards for (weeks - 1) weeks, then forward for current week
-  const gridStart = addDays(startDate, -(weeks - 1) * 7)
-
-  for (let i = 0; i < totalDays; i++) {
-    const dateStr = addDays(gridStart, i)
-    const dow = getDayOfWeek(dateStr)
-    const status = statusMap.get(dateStr) ?? null
-    grid.push({ date: dateStr, dayOfWeek: dow, status })
-  }
-
-  return grid
-}
-
 /**
  * Calculate the completion rate over the last N days.
  * Returns a number between 0 and 1 (percentage as decimal).

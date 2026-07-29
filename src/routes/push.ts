@@ -1,17 +1,57 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import WebPushSubscriptionModel from '../models/WebPushSubscription.js'
+import { getPrisma } from '../lib/prisma.js'
 import { PushSubscribeSchema, parseBody } from '../lib/validation.js'
 import { ValidationError } from '../lib/errors.js'
+
 const router = Router()
 
 router.post('/subscribe', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const p = parseBody(PushSubscribeSchema, req.body); if (!p.success) throw new ValidationError(p.error)
-    await WebPushSubscriptionModel.findOneAndUpdate({ endpoint: p.data.subscription.endpoint }, { $set: { ...(p.data as any).subscription, userAgent: p.data.userAgent } }, { upsert: true })
+    const parsed = parseBody(PushSubscribeSchema, req.body)
+    if (!parsed.success) throw new ValidationError(parsed.error)
+    const { endpoint, keys } = parsed.data.subscription
+    const prisma = getPrisma()
+    const existing = await prisma.webPushSubscription.findUnique({
+      where: { endpoint },
+      select: { userId: true },
+    })
+    if (existing && existing.userId !== req.userId!) {
+      res.status(409).json({ error: 'Subscription belongs to another user' })
+      return
+    }
+    await prisma.webPushSubscription.upsert({
+      where: { endpoint },
+      update: {
+        p256dh: keys.p256dh,
+        auth: keys.auth,
+        userAgent: parsed.data.userAgent ?? '',
+      },
+      create: {
+        userId: req.userId!,
+        endpoint,
+        p256dh: keys.p256dh,
+        auth: keys.auth,
+        userAgent: parsed.data.userAgent ?? '',
+      },
+    })
     res.json({ ok: true })
-  } catch (err) { next(err) }
+  } catch (err) {
+    next(err)
+  }
 })
+
 router.delete('/subscribe', async (req: Request, res: Response, next: NextFunction) => {
-  try { const { endpoint } = req.body; if (endpoint) await WebPushSubscriptionModel.findOneAndDelete({ endpoint }); res.json({ ok: true }) } catch (err) { next(err) }
+  try {
+    const endpoint = req.body?.endpoint
+    if (typeof endpoint === 'string' && endpoint) {
+      await getPrisma().webPushSubscription.deleteMany({
+        where: { endpoint, userId: req.userId! },
+      })
+    }
+    res.json({ ok: true })
+  } catch (err) {
+    next(err)
+  }
 })
+
 export default router

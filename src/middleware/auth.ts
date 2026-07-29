@@ -8,12 +8,14 @@ const PUBLIC_PREFIXES = [
   '/api/auth/signup',
   '/api/auth/logout',
   '/api/posthook_listener',
-  '/api/devices/register',
   '/api/alexa',
 ]
 
 function isPublic(pathname: string): boolean {
-  return PUBLIC_PREFIXES.some(p => pathname.startsWith(p))
+  const canonicalPath = pathname.startsWith('/api/v1/')
+    ? pathname.replace('/api/v1/', '/api/')
+    : pathname
+  return PUBLIC_PREFIXES.some(p => canonicalPath.startsWith(p))
 }
 
 function resolveToken(req: Request): string | undefined {

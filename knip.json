@@ -1,0 +1,8 @@
+{
+  "ignoreDependencies": [
+    "@prisma/client",
+    "bun",
+    "pg",
+    "pino-pretty"
+  ]
+}

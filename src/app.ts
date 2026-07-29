@@ -6,6 +6,7 @@ import { corsMiddleware } from './middleware/cors.js'
 import { requestIdMiddleware } from './middleware/requestId.js'
 import { generalLimiter } from './middleware/rateLimiter.js'
 import { authMiddleware } from './middleware/auth.js'
+import { csrfOriginMiddleware } from './middleware/csrfOrigin.js'
 import { errorHandler } from './middleware/errorHandler.js'
 import { routes } from './routes/index.js'
 
@@ -18,11 +19,12 @@ export function createApp() {
   app.use(corsMiddleware)
   app.use(express.json({ limit: '5mb' }))
   app.use(cookieParser())
+  app.use(csrfOriginMiddleware)
   app.use(generalLimiter)
-  app.use(authMiddleware)
 
   // ── Health check ──
   app.get('/health', (_req, res) => { res.json({ status: 'ok' }) })
+  app.use(authMiddleware)
 
   // ── Routes (mounted at /api and /api/v1 for backward compat) ──
   app.use('/api/v1', routes)

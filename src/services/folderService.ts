@@ -1,9 +1,4 @@
-import { connectDB } from '../lib/mongodb.js'
-import ListModel from '../models/List'
-import ListGroupModel from '../models/ListGroup'
-import TaskModel from '../models/Task'
-
-// ── Types ────────────────────────────────────────────────────
+import { getPrisma } from '../lib/prisma.js'
 
 interface CreateFolderInput {
   title: string
@@ -24,210 +19,176 @@ interface UpdateFolderInput {
   groupTitle?: string | null
 }
 
-type LeanDoc = Record<string, unknown> & { _id: unknown }
+type ApiRecord = Record<string, any>
 
-// ── Group resolution (shared by create + update) ─────────────
+const taskInclude = {
+  comments: { orderBy: { createdAt: 'asc' as const } },
+  reminders: true,
+  completions: { orderBy: { date: 'asc' as const } },
+  activities: { orderBy: { timestamp: 'asc' as const } },
+} as const
+
+function serializeRecord(record: ApiRecord): ApiRecord {
+  const { id, ...rest } = record
+  return { ...rest, _id: id }
+}
+
+function serializeTask(task: ApiRecord): ApiRecord {
+  const { id, comments = [], reminders = [], completions = [], activities = [], ...rest } = task
+  if (rest.status === 'in_progress') rest.status = 'in-progress'
+  return {
+    ...rest,
+    _id: id,
+    comments: comments.map(({ id: childId, taskId: _taskId, ...item }: ApiRecord) => ({
+      ...item,
+      _id: childId,
+    })),
+    reminders: reminders.map(({ id: childId, taskId: _taskId, ...item }: ApiRecord) => ({
+      ...item,
+      type: item.type === 'before_start'
+        ? 'before-start'
+        : item.type === 'on_day_at'
+          ? 'on-day-at'
+          : item.type,
+      id: childId,
+      _id: childId,
+    })),
+    completions: completions.map(({ id: childId, taskId: _taskId, ...item }: ApiRecord) => ({
+      ...item,
+      _id: childId,
+      date: item.date instanceof Date ? item.date.toISOString().slice(0, 10) : item.date,
+    })),
+    activities: activities.map(({ id: childId, taskId: _taskId, ...item }: ApiRecord) => ({
+      ...item,
+      _id: childId,
+    })),
+  }
+}
 
 async function resolveGroup(
   ownerId: string,
   groupId?: string | null,
   groupTitle?: string | null,
-): Promise<{ group: LeanDoc | null; created: boolean }> {
-  // Case A — no group
+): Promise<{ group: ApiRecord | null; created: boolean }> {
+  const prisma = getPrisma()
   if (!groupId && !groupTitle) {
     return { group: null, created: false }
   }
 
-  // Case B — groupId passed: validate it exists and belongs to owner
   if (groupId) {
-    const existing = await ListGroupModel.findOne({
-      _id: groupId,
-      ownerId,
-    }).lean() as LeanDoc | null
-
-    if (!existing) {
-      throw new Error('Group not found or not owned by user')
-    }
+    const existing = await prisma.listGroup.findFirst({ where: { id: groupId, ownerId } })
+    if (!existing) throw new Error('Group not found or not owned by user')
     return { group: existing, created: false }
   }
 
-  // Case C — groupTitle passed: find or create
   if (groupTitle) {
-    const existing = await ListGroupModel.findOne({
-      title: groupTitle,
-      ownerId,
-    }).lean() as LeanDoc | null
+    const existing = await prisma.listGroup.findFirst({ where: { title: groupTitle, ownerId } })
+    if (existing) return { group: existing, created: false }
 
-    if (existing) {
-      return { group: existing, created: false }
-    }
-
-    // Get max order for positioning
-    const maxOrder = await ListGroupModel.findOne({ ownerId })
-      .sort({ order: -1 })
-      .lean() as LeanDoc | null
-    const nextOrder = maxOrder ? ((maxOrder.order as number) || 0) + 1 : 0
-
-    const newGroup = await ListGroupModel.create({
-      title: groupTitle,
-      ownerId,
-      order: nextOrder,
-      collapsed: false,
+    const maximum = await prisma.listGroup.aggregate({
+      where: { ownerId },
+      _max: { order: true },
     })
-    const plain = newGroup.toObject() as LeanDoc
-    return { group: plain, created: true }
+    const group = await prisma.listGroup.create({
+      data: {
+        title: groupTitle,
+        ownerId,
+        order: (maximum._max.order ?? -1) + 1,
+        collapsed: false,
+      },
+    })
+    return { group, created: true }
   }
 
   return { group: null, created: false }
 }
 
-// ── createFolder ─────────────────────────────────────────────
-
 export async function createFolder(input: CreateFolderInput) {
-  await connectDB()
-
   const { title, ownerId, icon, groupId, groupTitle, coverImageUrl, isPrivate } = input
+  if (!title || !title.trim()) throw new Error('Title is required')
 
-  if (!title || !title.trim()) {
-    throw new Error('Title is required')
-  }
-
-  // Resolve group (Cases A/B/C)
   const { group, created: groupCreated } = await resolveGroup(ownerId, groupId, groupTitle)
-
-  // Create the list (folder)
-  const list = await ListModel.create({
-    type: 'standard',
-    title: title.trim(),
-    icon: icon || '📁',
-    ownerId,
-    groupId: group ? String(group._id) : null,
-    coverImageUrl: coverImageUrl || undefined,
-    isPrivate: isPrivate ?? true,
-    blocks: [],
-    isInbox: false,
+  const list = await getPrisma().list.create({
+    data: {
+      type: 'standard',
+      title: title.trim(),
+      icon: icon || '📁',
+      ownerId,
+      groupId: group?.id ?? null,
+      coverImageUrl: coverImageUrl || '',
+      isPrivate: isPrivate ?? true,
+      blocks: [],
+      isInbox: false,
+    },
   })
 
-  const plainList = list.toObject() as LeanDoc
-
   return {
-    list: { ...plainList, _id: String(plainList._id) },
-    group: group ? { ...group, _id: String(group._id) } : null,
+    list: serializeRecord(list),
+    group: group ? serializeRecord(group) : null,
     created: { list: true, group: groupCreated },
   }
 }
-
-// ── updateFolder ─────────────────────────────────────────────
 
 export async function updateFolder(
   folderId: string,
   ownerId: string,
   updates: UpdateFolderInput,
 ) {
-  await connectDB()
+  const prisma = getPrisma()
+  const existing = await prisma.list.findUnique({ where: { id: folderId } })
+  if (!existing) throw new Error('NOT_FOUND')
+  if (existing.ownerId !== ownerId) throw new Error('FORBIDDEN')
 
-  // Validate ownership
-  const existing = await ListModel.findById(folderId).lean() as LeanDoc | null
-  if (!existing) {
-    throw new Error('NOT_FOUND')
-  }
-  if (String(existing.ownerId) !== ownerId) {
-    throw new Error('FORBIDDEN')
-  }
+  const data: ApiRecord = {}
+  if (updates.title !== undefined) data.title = updates.title.trim()
+  if (updates.icon !== undefined) data.icon = updates.icon
+  if (updates.coverImageUrl !== undefined) data.coverImageUrl = updates.coverImageUrl
+  if (updates.isPrivate !== undefined) data.isPrivate = updates.isPrivate
 
-  // Build $set object — only include fields that were explicitly passed
-  const $set: Record<string, unknown> = {}
-
-  if (updates.title !== undefined) $set.title = updates.title.trim()
-  if (updates.icon !== undefined) $set.icon = updates.icon
-  if (updates.coverImageUrl !== undefined) $set.coverImageUrl = updates.coverImageUrl
-  if (updates.isPrivate !== undefined) $set.isPrivate = updates.isPrivate
-
-  // Handle group change (same Cases A/B/C logic)
   if (updates.groupId !== undefined || updates.groupTitle !== undefined) {
     const { group } = await resolveGroup(ownerId, updates.groupId, updates.groupTitle)
-    $set.groupId = group ? String(group._id) : null
+    data.groupId = group?.id ?? null
   }
 
-  if (Object.keys($set).length === 0) {
-    // Nothing to update — return existing
-    return { ...existing, _id: String(existing._id) }
-  }
+  if (Object.keys(data).length === 0) return serializeRecord(existing)
 
-  const updated = await ListModel.findByIdAndUpdate(
-    folderId,
-    { $set },
-    { new: true },
-  ).lean() as LeanDoc | null
-
-  if (!updated) {
-    throw new Error('NOT_FOUND')
-  }
-
-  return { ...updated, _id: String(updated._id) }
+  const updated = await prisma.list.update({ where: { id: folderId }, data })
+  return serializeRecord(updated)
 }
-
-// ── deleteFolder ─────────────────────────────────────────────
 
 export async function deleteFolder(folderId: string, ownerId: string) {
-  await connectDB()
+  const prisma = getPrisma()
+  const existing = await prisma.list.findUnique({ where: { id: folderId } })
+  if (!existing) throw new Error('NOT_FOUND')
+  if (existing.ownerId !== ownerId) throw new Error('FORBIDDEN')
+  if (existing.isInbox) throw new Error('Cannot delete the Inbox')
 
-  // Validate ownership
-  const existing = await ListModel.findById(folderId).lean() as LeanDoc | null
-  if (!existing) {
-    throw new Error('NOT_FOUND')
-  }
-  if (String(existing.ownerId) !== ownerId) {
-    throw new Error('FORBIDDEN')
-  }
-
-  // Prevent deleting Inbox
-  if (existing.isInbox) {
-    throw new Error('Cannot delete the Inbox')
-  }
-
-  // Soft delete — set deletedAt, don't touch tasks inside
-  await ListModel.findByIdAndUpdate(folderId, {
-    $set: { deletedAt: new Date() },
+  await prisma.list.update({
+    where: { id: folderId },
+    data: { deletedAt: new Date() },
   })
-
   return { deleted: true, folderId }
 }
-
-// ── addTaskToFolder ──────────────────────────────────────────
 
 export async function addTaskToFolder(
   taskId: string,
   folderId: string,
   ownerId: string,
 ) {
-  await connectDB()
+  const prisma = getPrisma()
+  const updated = await prisma.$transaction(async (tx) => {
+    const folder = await tx.list.findFirst({ where: { id: folderId, ownerId } })
+    if (!folder) throw new Error('Folder not found')
 
-  // Validate folder exists and belongs to owner
-  const folder = await ListModel.findById(folderId).lean() as LeanDoc | null
-  if (!folder) {
-    throw new Error('Folder not found')
-  }
-  if (String(folder.ownerId) !== ownerId) {
-    throw new Error('FORBIDDEN')
-  }
+    const task = await tx.task.findFirst({ where: { id: taskId, userId: ownerId } })
+    if (!task) throw new Error('Task not found')
 
-  // Validate task exists
-  const task = await TaskModel.findById(taskId).lean() as LeanDoc | null
-  if (!task) {
-    throw new Error('Task not found')
-  }
+    return tx.task.update({
+      where: { id: task.id },
+      data: { listId: folder.id },
+      include: taskInclude,
+    })
+  })
 
-  // Move task to folder
-  const updated = await TaskModel.findByIdAndUpdate(
-    taskId,
-    { $set: { listId: folderId } },
-    { new: true },
-  ).lean() as LeanDoc | null
-
-  if (!updated) {
-    throw new Error('Failed to update task')
-  }
-
-  return { ...updated, _id: String(updated._id) }
+  return serializeTask(updated)
 }

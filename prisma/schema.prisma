@@ -1,0 +1,759 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ListType {
+  standard
+  habit
+  reading
+}
+
+enum CollaboratorRole {
+  creator
+  collaborator
+}
+
+enum WorkflowTemplateType {
+  kanban
+  sprint
+  sales
+  content
+  matrix
+  custom
+}
+
+enum TaskPriority {
+  low
+  medium
+  high
+}
+
+enum TaskStatus {
+  backlog
+  todo
+  in_progress @map("in-progress")
+  done
+  dropped
+}
+
+enum TaskRepeat {
+  daily
+  weekdays
+  weekly
+  monthly
+  yearly
+}
+
+enum HabitGoalType {
+  binary
+  count
+}
+
+enum HabitCompletionStatus {
+  achieved
+  unachieved
+  skipped
+  frozen
+}
+
+enum TaskReminderType {
+  before_start @map("before-start")
+  on_day_at    @map("on-day-at")
+  absolute
+}
+
+enum FocusSessionStatus {
+  active
+  completed
+  cancelled
+  extended
+}
+
+enum FocusEndedReason {
+  timer_ended
+  user_completed
+  user_cancelled
+}
+
+enum PomodoroSessionType {
+  focus
+  break
+}
+
+enum ChatMessageRole {
+  user
+  assistant
+}
+
+enum MemoryType {
+  book
+  movie
+  show
+  music
+  game
+  place
+  food
+  person
+  idea
+  quote
+  link
+  other
+}
+
+enum NotificationType {
+  habit_reminder
+  checkin_nudge
+  streak_milestone
+}
+
+enum NotificationStatus {
+  pending
+  sent
+  skipped
+  failed
+}
+
+enum PushDeviceType {
+  web
+  ios
+  android
+}
+
+enum ExternalCalendarSource {
+  google
+}
+
+enum CalendarConnectionStatus {
+  healthy
+  syncing
+  delayed
+  needs_attention
+  disconnected
+}
+
+model User {
+  // Existing MongoDB ObjectId strings are imported unchanged. New records may use cuid().
+  id                      String   @id @default(cuid()) @db.Text
+  username                String   @unique @db.Text
+  name                    String   @default("") @db.Text
+  passwordHash            String   @map("password_hash") @db.Text
+  googleAccessToken       String?  @map("google_access_token") @db.Text
+  googleRefreshToken      String?  @map("google_refresh_token") @db.Text
+  googleCalendarId        String   @default("primary") @map("google_calendar_id") @db.Text
+  googleCalendarConnected Boolean  @default(false) @map("google_calendar_connected")
+  mcpEnabled              Boolean  @default(false) @map("mcp_enabled")
+  mcpApiKey               String?  @unique @map("mcp_api_key") @db.Text
+  timezone                String   @default("UTC") @db.Text
+  habitSettings           Json?    @map("habit_settings") @db.JsonB
+  focusPreferences        Json?    @map("focus_preferences") @db.JsonB
+  calendarPreferences     Json?    @map("calendar_preferences") @db.JsonB
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tasks                  Task[]
+  lists                  List[]
+  listGroups             ListGroup[]
+  listCollaborations     ListCollaborator[]
+  workflows              Workflow[]
+  kanbanSections         KanbanSection[]
+  events                 Event[]
+  externalCalendarEvents ExternalCalendarEvent[]
+  reminders              Reminder[]
+  focusSessions          FocusSession[]
+  pomodoroSessions       PomodoroSession[]
+  chatSessions           ChatSession[]
+  memories               Memory[]
+  notificationSchedules  NotificationSchedule[]
+  pushDevices            UserPushDevice[]
+  devices                Device[]
+  webPushSubscriptions   WebPushSubscription[]
+  oauthStates            OAuthState[]
+  calendarAccounts       CalendarAccount[]
+  calendars              Calendar[]
+
+  @@map("users")
+}
+
+model OAuthState {
+  jti        String    @id @db.Text
+  userId     String    @map("user_id") @db.Text
+  provider   String    @db.Text
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, provider, expiresAt])
+  @@map("oauth_states")
+}
+
+model CalendarAccount {
+  id                   String                   @id @default(cuid()) @db.Text
+  userId               String                   @map("user_id") @db.Text
+  provider             ExternalCalendarSource
+  providerAccountId    String                   @map("provider_account_id") @db.Text
+  email                String                   @db.Text
+  displayName          String                   @default("") @map("display_name") @db.Text
+  avatarUrl            String?                  @map("avatar_url") @db.Text
+  googleAccessToken    String                   @map("google_access_token") @db.Text
+  googleRefreshToken   String?                  @map("google_refresh_token") @db.Text
+  grantedScopes        String[]                 @default([]) @map("granted_scopes")
+  tokenExpiresAt       DateTime?                @map("token_expires_at") @db.Timestamptz(3)
+  status               CalendarConnectionStatus @default(syncing)
+  lastSyncAttemptAt    DateTime?                @map("last_sync_attempt_at") @db.Timestamptz(3)
+  lastSuccessfulSyncAt DateTime?                @map("last_successful_sync_at") @db.Timestamptz(3)
+  lastErrorCode        String?                  @map("last_error_code") @db.Text
+  reconnectRequired    Boolean                  @default(false) @map("reconnect_required")
+  disconnectedAt       DateTime?                @map("disconnected_at") @db.Timestamptz(3)
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  calendars      Calendar[]
+  externalEvents ExternalCalendarEvent[]
+
+  @@unique([userId, provider, providerAccountId])
+  @@index([userId, provider, disconnectedAt])
+  @@index([userId, status, lastSuccessfulSyncAt])
+  @@map("calendar_accounts")
+}
+
+model Calendar {
+  id                     String    @id @default(cuid()) @db.Text
+  userId                 String    @map("user_id") @db.Text
+  accountId              String    @map("account_id") @db.Text
+  providerCalendarId     String    @map("provider_calendar_id") @db.Text
+  name                   String    @db.Text
+  providerColor          String?   @map("provider_color") @db.Text
+  colorOverride          String?   @map("color_override") @db.Text
+  isVisibleInCalendar    Boolean   @default(true) @map("is_visible_in_calendar")
+  isActiveInAgenda       Boolean   @default(true) @map("is_active_in_agenda")
+  affectsAvailability    Boolean   @default(true) @map("affects_availability")
+  isDefaultWriteCalendar Boolean   @default(false) @map("is_default_write_calendar")
+  isPrimary              Boolean   @default(false) @map("is_primary")
+  readOnly               Boolean   @default(false) @map("read_only")
+  timeZone               String?   @map("time_zone") @db.Text
+  sortOrder              Int       @default(0) @map("sort_order")
+  hidden                 Boolean   @default(false)
+  syncToken              String?   @map("sync_token") @db.Text
+  lastSyncedAt           DateTime? @map("last_synced_at") @db.Timestamptz(3)
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user    User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account CalendarAccount         @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  events  ExternalCalendarEvent[]
+
+  @@unique([accountId, providerCalendarId])
+  @@index([userId, isActiveInAgenda, hidden, sortOrder])
+  @@index([userId, isDefaultWriteCalendar])
+  @@index([accountId, hidden, sortOrder])
+  @@map("calendars")
+}
+
+model ListGroup {
+  id        String   @id @default(cuid()) @db.Text
+  ownerId   String   @map("owner_id") @db.Text
+  title     String   @db.Text
+  order     Int      @default(0)
+  collapsed Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  owner User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  lists List[]
+
+  @@unique([ownerId, title])
+  @@index([ownerId, order])
+  @@map("list_groups")
+}
+
+model List {
+  id                 String    @id @default(cuid()) @db.Text
+  ownerId            String    @map("owner_id") @db.Text
+  groupId            String?   @map("group_id") @db.Text
+  type               ListType  @default(standard)
+  title              String    @default("") @db.Text
+  icon               String    @default("") @db.Text
+  coverImageUrl      String    @default("") @map("cover_image_url") @db.Text
+  isPrivate          Boolean   @default(true) @map("is_private")
+  pinnedToFavorites  Boolean   @default(false) @map("pinned_to_favorites")
+  hideCompletedTasks Boolean   @default(false) @map("hide_completed_tasks")
+  blocks             Json?     @db.JsonB
+  isInbox            Boolean   @default(false) @map("is_inbox")
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  owner         User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  group         ListGroup?         @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  collaborators ListCollaborator[]
+  tasks         Task[]
+
+  @@index([ownerId, deletedAt, createdAt])
+  @@index([ownerId, groupId])
+  @@index([groupId])
+  @@map("lists")
+}
+
+model ListCollaborator {
+  listId     String           @map("list_id") @db.Text
+  userId     String           @map("user_id") @db.Text
+  email      String?          @db.Text
+  role       CollaboratorRole @default(collaborator)
+  pending    Boolean          @default(false)
+  invitedAt  DateTime         @default(now()) @map("invited_at") @db.Timestamptz(3)
+  acceptedAt DateTime?        @map("accepted_at") @db.Timestamptz(3)
+
+  list List @relation(fields: [listId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([listId, userId])
+  @@index([userId, pending])
+  @@map("list_collaborators")
+}
+
+model Workflow {
+  id           String               @id @default(cuid()) @db.Text
+  ownerId      String               @map("owner_id") @db.Text
+  name         String               @db.Text
+  icon         String               @default("📋") @db.Text
+  color        String               @default("#0f62fe") @db.Text
+  templateType WorkflowTemplateType @default(kanban) @map("template_type")
+  order        Int                  @default(0)
+  archived     Boolean              @default(false)
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  owner   User             @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  columns WorkflowColumn[]
+  tasks   Task[]
+
+  @@index([ownerId, archived, order])
+  @@map("workflows")
+}
+
+model WorkflowColumn {
+  // IDs are generated by the frontend today and are globally unique UUID strings.
+  id         String  @id @default(cuid()) @db.Text
+  workflowId String  @map("workflow_id") @db.Text
+  title      String  @db.Text
+  order      Int     @default(0)
+  color      String? @db.Text
+  wipLimit   Int?    @map("wip_limit")
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  tasks    Task[]
+
+  @@unique([workflowId, order])
+  @@index([workflowId])
+  @@map("workflow_columns")
+}
+
+model KanbanSection {
+  // Retained for compatibility with the legacy /kanban-sections API.
+  id        String   @id @default(cuid()) @db.Text
+  userId    String   @map("user_id") @db.Text
+  title     String   @db.Text
+  order     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, order])
+  @@map("kanban_sections")
+}
+
+model Task {
+  id                String         @id @default(cuid()) @db.Text
+  userId            String         @map("user_id") @db.Text
+  workflowId        String?        @map("workflow_id") @db.Text
+  sectionId         String?        @map("section_id") @db.Text
+  listId            String?        @map("list_id") @db.Text
+  parentId          String?        @map("parent_id") @db.Text
+  title             String         @db.Text
+  description       String?        @db.Text
+  notes             Json?          @db.JsonB
+  dueDate           DateTime?      @map("due_date") @db.Timestamptz(3)
+  priority          TaskPriority?  @default(medium)
+  status            TaskStatus     @default(backlog)
+  color             String         @default("#34d399") @db.Text
+  tags              String[]       @default([])
+  repeat            TaskRepeat?
+  completedAt       DateTime?      @map("completed_at") @db.Timestamptz(3)
+  scheduledStart    DateTime?      @map("scheduled_start") @db.Timestamptz(3)
+  scheduledEnd      DateTime?      @map("scheduled_end") @db.Timestamptz(3)
+  estimatedEffort   Float?         @map("estimated_effort")
+  actualEffort      Int            @default(0) @map("actual_effort")
+  googleEventId     String?        @map("google_event_id") @db.Text
+  calendarSynced    Boolean        @default(false) @map("calendar_synced")
+  depth             Int            @default(0)
+  path              String         @default("/") @db.Text
+  order             Int            @default(0)
+  isHabit           Boolean        @default(false) @map("is_habit")
+  habitGoalType     HabitGoalType? @map("habit_goal_type")
+  habitTarget       Int?           @map("habit_target")
+  habitUnit         String?        @map("habit_unit") @db.Text
+  habitFrequency    Json?          @map("habit_frequency") @db.JsonB
+  streakCurrent     Int            @default(0) @map("streak_current")
+  streakBest        Int            @default(0) @map("streak_best")
+  streakLastUpdated DateTime?      @map("streak_last_updated") @db.Timestamptz(3)
+  habitReminderTime String?        @map("habit_reminder_time") @db.VarChar(5)
+  habitIcon         String?        @map("habit_icon") @db.Text
+  habitColor        String?        @map("habit_color") @db.Text
+  kanbanOrder       Float          @default(0) @map("kanban_order")
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workflow         Workflow?         @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  workflowColumn   WorkflowColumn?   @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  list             List?             @relation(fields: [listId], references: [id], onDelete: SetNull)
+  parent           Task?             @relation("TaskHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children         Task[]            @relation("TaskHierarchy")
+  comments         TaskComment[]
+  reminders        TaskReminder[]
+  completions      HabitCompletion[]
+  activities       TaskActivity[]
+  focusSessions    FocusSession[]
+  pomodoroSessions PomodoroSession[]
+  linkedMemories   Memory[]
+
+  @@index([userId, createdAt])
+  @@index([userId, status, dueDate])
+  @@index([userId, isHabit, order])
+  @@index([userId, scheduledStart])
+  @@index([userId, parentId, order])
+  @@index([userId, listId])
+  @@index([userId, workflowId, sectionId, kanbanOrder])
+  @@map("tasks")
+}
+
+model TaskComment {
+  id           String   @id @default(cuid()) @db.Text
+  taskId       String   @map("task_id") @db.Text
+  text         String   @db.Text
+  authorName   String?  @map("author_name") @db.Text
+  authorAvatar String?  @map("author_avatar") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
+  @@map("task_comments")
+}
+
+model TaskReminder {
+  // `id` is the existing application-supplied reminder ID.
+  id            String           @id @default(cuid()) @db.Text
+  taskId        String           @map("task_id") @db.Text
+  type          TaskReminderType @default(before_start)
+  offsetMinutes Int              @default(15) @map("offset_minutes")
+  timeOfDay     String?          @map("time_of_day") @db.VarChar(5)
+  absoluteTime  DateTime?        @map("absolute_time") @db.Timestamptz(3)
+  sent          Boolean          @default(false)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, sent])
+  @@index([sent, absoluteTime])
+  @@map("task_reminders")
+}
+
+model HabitCompletion {
+  id       String                @id @default(cuid()) @db.Text
+  taskId   String                @map("task_id") @db.Text
+  date     DateTime              @db.Date
+  status   HabitCompletionStatus
+  value    Int?
+  reason   String?               @db.Text
+  loggedAt DateTime?             @map("logged_at") @db.Timestamptz(3)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, date])
+  @@index([taskId, date])
+  @@map("habit_completions")
+}
+
+model TaskActivity {
+  id        String   @id @default(cuid()) @db.Text
+  taskId    String   @map("task_id") @db.Text
+  action    String   @db.Text
+  detail    String?  @db.Text
+  timestamp DateTime @default(now()) @db.Timestamptz(3)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, timestamp])
+  @@map("task_activities")
+}
+
+model Event {
+  id          String   @id @default(cuid()) @db.Text
+  userId      String   @map("user_id") @db.Text
+  type        String   @default("event") @db.Text
+  title       String   @db.Text
+  description String?  @db.Text
+  startDate   DateTime @map("start_date") @db.Timestamptz(3)
+  endDate     DateTime @map("end_date") @db.Timestamptz(3)
+  allDay      Boolean  @default(false) @map("all_day")
+  location    String?  @db.Text
+  color       String   @default("#5b8ded") @db.Text
+  posthookId  String?  @map("posthook_id") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  comments EventComment[]
+
+  @@index([userId, startDate])
+  @@index([userId, endDate])
+  @@map("events")
+}
+
+model EventComment {
+  id        String   @id @default(cuid()) @db.Text
+  eventId   String   @map("event_id") @db.Text
+  text      String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, createdAt])
+  @@map("event_comments")
+}
+
+model ExternalCalendarEvent {
+  id               String                 @id @default(cuid()) @db.Text
+  userId           String                 @map("user_id") @db.Text
+  source           ExternalCalendarSource @default(google)
+  externalId       String                 @map("external_id") @db.Text
+  title            String                 @default("") @db.Text
+  start            DateTime               @db.Timestamptz(3)
+  end              DateTime               @db.Timestamptz(3)
+  allDay           Boolean                @default(false) @map("all_day")
+  lastSyncedAt     DateTime               @default(now()) @map("last_synced_at") @db.Timestamptz(3)
+  calendarId       String                 @default("primary") @map("calendar_id") @db.Text
+  accountId        String?                @map("account_id") @db.Text
+  calendarRecordId String?                @map("calendar_record_id") @db.Text
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account  CalendarAccount? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  calendar Calendar?        @relation(fields: [calendarRecordId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, calendarId, externalId])
+  @@index([userId, start, end])
+  @@index([userId, calendarRecordId, start, end])
+  @@index([accountId, calendarId, start])
+  @@map("external_calendar_events")
+}
+
+model Reminder {
+  id           String   @id @default(cuid()) @db.Text
+  userId       String   @map("user_id") @db.Text
+  type         String   @default("reminder") @db.Text
+  title        String   @db.Text
+  description  String?  @db.Text
+  reminderDate DateTime @map("reminder_date") @db.Timestamptz(3)
+  notified     Boolean  @default(false)
+  color        String   @default("#fbbf24") @db.Text
+  posthookId   String?  @map("posthook_id") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  comments ReminderComment[]
+
+  @@index([userId, reminderDate])
+  @@index([userId, notified, reminderDate])
+  @@map("reminders")
+}
+
+model ReminderComment {
+  id         String   @id @default(cuid()) @db.Text
+  reminderId String   @map("reminder_id") @db.Text
+  text       String   @db.Text
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  reminder Reminder @relation(fields: [reminderId], references: [id], onDelete: Cascade)
+
+  @@index([reminderId, createdAt])
+  @@map("reminder_comments")
+}
+
+model FocusSession {
+  id                 String             @id @default(cuid()) @db.Text
+  userId             String             @map("user_id") @db.Text
+  taskId             String?            @map("task_id") @db.Text
+  taskTitleSnapshot  String?            @map("task_title_snapshot") @db.Text
+  plannedDurationMin Int                @default(25) @map("planned_duration_min")
+  plannedBreakMin    Int                @default(5) @map("planned_break_min")
+  startedAt          DateTime           @map("started_at") @db.Timestamptz(3)
+  pausedAt           DateTime?          @map("paused_at") @db.Timestamptz(3)
+  totalPausedMs      Int                @default(0) @map("total_paused_ms")
+  endedAt            DateTime?          @map("ended_at") @db.Timestamptz(3)
+  status             FocusSessionStatus @default(active)
+  actualDurationMin  Int                @default(0) @map("actual_duration_min")
+  extendedByMin      Int                @default(0) @map("extended_by_min")
+  endedReason        FocusEndedReason?  @map("ended_reason")
+  postSessionNote    String?            @map("post_session_note") @db.VarChar(200)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, startedAt])
+  @@index([userId, taskId, startedAt])
+  @@map("focus_sessions")
+}
+
+model PomodoroSession {
+  id          String              @id @default(cuid()) @db.Text
+  userId      String              @map("user_id") @db.Text
+  taskId      String?             @map("task_id") @db.Text
+  taskTitle   String              @default("") @map("task_title") @db.Text
+  type        PomodoroSessionType
+  duration    Int
+  startedAt   DateTime            @map("started_at") @db.Timestamptz(3)
+  completedAt DateTime?           @map("completed_at") @db.Timestamptz(3)
+  completed   Boolean             @default(false)
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([userId, startedAt])
+  @@index([userId, taskId, startedAt])
+  @@map("pomodoro_sessions")
+}
+
+model ChatSession {
+  id        String   @id @default(cuid()) @db.Text
+  userId    String   @map("user_id") @db.Text
+  title     String   @default("New chat") @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user     User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages ChatSessionMessage[]
+
+  @@index([userId, updatedAt])
+  @@map("chat_sessions")
+}
+
+model ChatSessionMessage {
+  // Embedded Mongo messages had no IDs, so migration generates these IDs and preserves array order.
+  id        String          @id @default(cuid()) @db.Text
+  sessionId String          @map("session_id") @db.Text
+  position  Int
+  role      ChatMessageRole
+  content   String          @db.Text
+  timestamp DateTime        @default(now()) @db.Timestamptz(3)
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, position])
+  @@index([sessionId, timestamp])
+  @@map("chat_session_messages")
+}
+
+model Memory {
+  id           String        @id @default(cuid()) @db.Text
+  userId       String        @map("user_id") @db.Text
+  linkedTaskId String?       @map("linked_task_id") @db.Text
+  type         MemoryType
+  title        String        @db.Text
+  description  String?       @db.Text
+  attributes   Json          @default("{}") @db.JsonB
+  status       String?       @db.Text
+  priority     TaskPriority?
+  tags         String[]      @default([])
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user       User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  linkedTask Task? @relation(fields: [linkedTaskId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([userId, type, status])
+  @@index([linkedTaskId])
+  @@map("memories")
+}
+
+model NotificationSchedule {
+  id            String             @id @default(cuid()) @db.Text
+  userId        String             @map("user_id") @db.Text
+  type          NotificationType
+  scheduledFor  DateTime           @map("scheduled_for") @db.Timestamptz(3)
+  payload       Json               @default("{}") @db.JsonB
+  status        NotificationStatus @default(pending)
+  skippedReason String?            @map("skipped_reason") @db.Text
+  sentAt        DateTime?          @map("sent_at") @db.Timestamptz(3)
+  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, scheduledFor])
+  @@index([status, scheduledFor])
+  @@map("notification_schedules")
+}
+
+model UserPushDevice {
+  id         String         @id @default(cuid()) @db.Text
+  userId     String         @map("user_id") @db.Text
+  type       PushDeviceType
+  token      String         @unique @db.Text
+  deviceName String?        @map("device_name") @db.Text
+  addedAt    DateTime       @default(now()) @map("added_at") @db.Timestamptz(3)
+  lastSeenAt DateTime?      @map("last_seen_at") @db.Timestamptz(3)
+  isActive   Boolean        @default(true) @map("is_active")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive])
+  @@map("user_push_devices")
+}
+
+model Device {
+  id        String   @id @default(cuid()) @db.Text
+  userId    String   @map("user_id") @db.Text
+  fcmToken  String   @unique @map("fcm_token") @db.Text
+  platform  String   @default("android") @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAt])
+  @@map("devices")
+}
+
+model WebPushSubscription {
+  id        String   @id @default(cuid()) @db.Text
+  userId    String   @map("user_id") @db.Text
+  endpoint  String   @unique @db.Text
+  p256dh    String   @db.Text
+  auth      String   @db.Text
+  userAgent String   @default("") @map("user_agent") @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAt])
+  @@map("web_push_subscriptions")
+}

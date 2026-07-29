@@ -1,116 +1,174 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import FocusSessionModel from '../models/FocusSession.js'
-import TaskModel from '../models/Task.js'
+import { getPrisma } from '../lib/prisma.js'
 import { CreateFocusSessionSchema, FocusSessionActionSchema, parseBody } from '../lib/validation.js'
 import { ValidationError, NotFoundError } from '../lib/errors.js'
 
 const router = Router()
-type LeanDoc = Record<string, unknown> & { _id: unknown }
 
-// GET /focus/sessions
+type ApiRecord = Record<string, unknown> & { id: string }
+
+function serializeSession(value: ApiRecord): Record<string, unknown> {
+  const { id, ...rest } = value
+  return { ...rest, _id: id }
+}
+
 router.get('/sessions', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const userId = req.userId!
     const { taskId, from, to } = req.query as Record<string, string>
-    const filter: Record<string, unknown> = { userId }
-    if (taskId) filter.taskId = taskId
-    if (from || to) {
-      filter.startedAt = {}
-      if (from) (filter.startedAt as any).$gte = new Date(from)
-      if (to) (filter.startedAt as any).$lte = new Date(to)
-    }
-    const sessions = await FocusSessionModel.find(filter).sort({ startedAt: -1 }).lean() as LeanDoc[]
-    res.json(sessions.map(s => ({ ...s, _id: String(s._id) })))
+    const startedAt: { gte?: Date; lte?: Date } = {}
+    if (from) startedAt.gte = new Date(from)
+    if (to) startedAt.lte = new Date(to)
+    const sessions = await getPrisma().focusSession.findMany({
+      where: {
+        userId: req.userId!,
+        ...(taskId ? { taskId } : {}),
+        ...((from || to) ? { startedAt } : {}),
+      },
+      orderBy: { startedAt: 'desc' },
+    })
+    res.json(sessions.map(serializeSession))
   } catch (err) { next(err) }
 })
 
-// POST /focus/sessions
 router.post('/sessions', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const userId = req.userId!
     const parsed = parseBody(CreateFocusSessionSchema, req.body)
     if (!parsed.success) throw new ValidationError(parsed.error)
 
-    // Cancel any existing active session
-    await FocusSessionModel.updateMany({ userId, status: 'active' }, { $set: { status: 'cancelled', endedAt: new Date(), endedReason: 'user_cancelled' } })
+    const prisma = getPrisma()
+    const userId = req.userId!
+    const session = await prisma.$transaction(async (transaction) => {
+      await transaction.focusSession.updateMany({
+        where: { userId, status: 'active' },
+        data: {
+          status: 'cancelled',
+          endedAt: new Date(),
+          endedReason: 'user_cancelled',
+        },
+      })
 
-    let taskTitle: string | null = null
-    if (parsed.data.taskId) {
-      const task = await TaskModel.findOne({ _id: parsed.data.taskId, userId }).lean() as LeanDoc | null
-      if (task) taskTitle = task.title as string
-    }
+      let taskTitleSnapshot: string | null = null
+      if (parsed.data.taskId) {
+        const task = await transaction.task.findFirst({
+          where: { id: parsed.data.taskId, userId },
+          select: { title: true },
+        })
+        if (!task) throw new NotFoundError('Task', parsed.data.taskId)
+        taskTitleSnapshot = task.title
+      }
 
-    const session = await FocusSessionModel.create({
-      userId, ...parsed.data, startedAt: new Date(), status: 'active', taskTitleSnapshot: taskTitle,
+      return transaction.focusSession.create({
+        data: {
+          userId,
+          taskId: parsed.data.taskId,
+          plannedDurationMin: parsed.data.plannedDurationMin,
+          plannedBreakMin: parsed.data.plannedBreakMin,
+          startedAt: new Date(),
+          status: 'active',
+          taskTitleSnapshot,
+        },
+      })
     })
-    const plain = session.toObject() as LeanDoc
-    res.status(201).json({ ...plain, _id: String(plain._id) })
+    res.status(201).json(serializeSession(session))
   } catch (err) { next(err) }
 })
 
-// GET /focus/sessions/active
 router.get('/sessions/active', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const userId = req.userId!
-    const session = await FocusSessionModel.findOne({ userId, status: 'active' }).lean() as LeanDoc | null
-    res.json(session ? { ...session, _id: String(session._id) } : null)
+    const session = await getPrisma().focusSession.findFirst({
+      where: { userId: req.userId!, status: 'active' },
+    })
+    res.json(session ? serializeSession(session) : null)
   } catch (err) { next(err) }
 })
 
-// PATCH /focus/sessions/:id
 router.patch('/sessions/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const userId = req.userId!
     const parsed = parseBody(FocusSessionActionSchema, req.body)
     if (!parsed.success) throw new ValidationError(parsed.error)
 
-    const session = await FocusSessionModel.findOne({ _id: req.params.id, userId }).lean() as LeanDoc | null
+    const prisma = getPrisma()
+    const userId = req.userId!
+    const session = await prisma.focusSession.findFirst({
+      where: { id: req.params.id, userId },
+    })
     if (!session) throw new NotFoundError('FocusSession', req.params.id)
 
-    const { action, additionalMin, endedReason, postSessionNote } = parsed.data as any
-    const $set: Record<string, unknown> = {}
+    const { action, additionalMin, endedReason, postSessionNote } = parsed.data
+    const data: {
+      pausedAt?: Date | null
+      status?: 'active' | 'completed' | 'cancelled'
+      totalPausedMs?: number
+      extendedByMin?: number
+      endedAt?: Date
+      endedReason?: 'timer_ended' | 'user_completed' | 'user_cancelled'
+      postSessionNote?: string
+      actualDurationMin?: number
+    } = {}
 
     switch (action) {
-      case 'pause': $set.pausedAt = new Date(); $set.status = 'active'; break
-      case 'resume': {
-        if (session.pausedAt) {
-          const pausedMs = Date.now() - new Date(session.pausedAt as string).getTime()
-          $set.totalPausedMs = ((session.totalPausedMs as number) || 0) + pausedMs
-        }
-        $set.pausedAt = null; break
-      }
-      case 'extend': $set.extendedByMin = ((session.extendedByMin as number) || 0) + (additionalMin || 0); break
-      case 'complete': case 'cancel': {
-        $set.status = action === 'complete' ? 'completed' : 'cancelled'
-        $set.endedAt = new Date()
-        $set.endedReason = endedReason || (action === 'complete' ? 'user_completed' : 'user_cancelled')
-        if (postSessionNote) $set.postSessionNote = postSessionNote
-        const startMs = new Date(session.startedAt as string).getTime()
-        $set.actualDurationMin = Math.round((Date.now() - startMs - ((session.totalPausedMs as number) || 0)) / 60000)
+      case 'pause':
+        data.pausedAt = new Date()
+        data.status = 'active'
         break
-      }
+      case 'resume':
+        if (session.pausedAt) {
+          data.totalPausedMs = session.totalPausedMs + (Date.now() - session.pausedAt.getTime())
+        }
+        data.pausedAt = null
+        break
+      case 'extend':
+        data.extendedByMin = session.extendedByMin + (additionalMin || 0)
+        break
+      case 'complete':
+      case 'cancel':
+        data.status = action === 'complete' ? 'completed' : 'cancelled'
+        data.endedAt = new Date()
+        data.endedReason = endedReason || (action === 'complete' ? 'user_completed' : 'user_cancelled')
+        if (postSessionNote) data.postSessionNote = postSessionNote
+        data.actualDurationMin = Math.round(
+          (Date.now() - session.startedAt.getTime() - session.totalPausedMs) / 60000,
+        )
+        break
     }
 
-    const updated = await FocusSessionModel.findOneAndUpdate({ _id: req.params.id, userId }, { $set }, { new: true }).lean() as LeanDoc | null
-    res.json({ ...updated, _id: String(updated!._id) })
+    // The unique update is safe after the owned lookup because userId is immutable.
+    const updated = await prisma.focusSession.update({
+      where: { id: session.id },
+      data,
+    })
+    res.json(serializeSession(updated))
   } catch (err) { next(err) }
 })
 
-// GET /focus/stats
 router.get('/stats', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const prisma = getPrisma()
     const userId = req.userId!
     const now = new Date()
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const weekStart = new Date(todayStart); weekStart.setDate(weekStart.getDate() - weekStart.getDay())
+    const weekStart = new Date(todayStart)
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay())
 
     const [todaySessions, weekSessions, allSessions] = await Promise.all([
-      FocusSessionModel.find({ userId, status: 'completed', startedAt: { $gte: todayStart } }).lean(),
-      FocusSessionModel.find({ userId, status: 'completed', startedAt: { $gte: weekStart } }).lean(),
-      FocusSessionModel.find({ userId, status: 'completed' }).sort({ startedAt: -1 }).limit(100).lean(),
+      prisma.focusSession.findMany({
+        where: { userId, status: 'completed', startedAt: { gte: todayStart } },
+        select: { actualDurationMin: true },
+      }),
+      prisma.focusSession.findMany({
+        where: { userId, status: 'completed', startedAt: { gte: weekStart } },
+        select: { actualDurationMin: true },
+      }),
+      prisma.focusSession.findMany({
+        where: { userId, status: 'completed' },
+        orderBy: { startedAt: 'desc' },
+        take: 100,
+        select: { actualDurationMin: true },
+      }),
     ])
 
-    const sumMin = (arr: any[]) => arr.reduce((s, x) => s + (x.actualDurationMin || 0), 0)
+    const sumMin = (sessions: { actualDurationMin: number }[]) =>
+      sessions.reduce((sum, session) => sum + session.actualDurationMin, 0)
     res.json({
       today: { sessions: todaySessions.length, totalMin: sumMin(todaySessions) },
       week: { sessions: weekSessions.length, totalMin: sumMin(weekSessions) },

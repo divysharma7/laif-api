@@ -1,0 +1,9 @@
+{
+  "app": {
+    "name": "laif-api",
+    "region": "ap-southeast-1",
+    "framework": "bun",
+    "entry": "src/index.ts",
+    "httpPort": 4000
+  }
+}

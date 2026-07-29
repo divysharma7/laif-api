@@ -1,4 +1,29 @@
 import { z } from 'zod'
+import { isValidIanaTimeZone, isValidIsoDate } from './timeZone.js'
+
+export const AgendaQuerySchema = z.object({
+  date: z.string().refine(isValidIsoDate, 'date must be a valid YYYY-MM-DD value'),
+  timeZone: z.string().refine(isValidIanaTimeZone, 'timeZone must be a valid IANA time zone').optional(),
+})
+
+export const CalendarInventoryUpdateSchema = z.object({
+  group: z.enum(['active', 'passive']).optional(),
+  visible: z.boolean().optional(),
+  order: z.number().int().min(0).optional(),
+  color: z.string().min(1).max(32).nullable().optional(),
+  isDefaultWrite: z.boolean().optional(),
+}).refine(
+  value => Object.values(value).some(field => field !== undefined),
+  'at least one calendar setting is required',
+)
+
+export const DisconnectGoogleAccountSchema = z.object({
+  accountId: z.string().min(1).optional(),
+})
+
+export const GoogleCalendarSyncSchema = z.object({
+  accountId: z.string().min(1),
+})
 
 export const CreateTaskSchema = z.object({
   title: z.string().min(1).max(500),
@@ -99,10 +124,6 @@ export const CreateEventSchema = z.object({
 
 export const UpdateEventSchema = CreateEventSchema.partial()
 
-export const EventRemindSchema = z.object({
-  minutesBefore: z.number().int().min(0).max(10080).optional(),
-})
-
 export const CreateReminderSchema = z.object({
   title: z.string().min(1).max(500),
   description: z.string().max(2000).optional().nullable(),
@@ -138,28 +159,6 @@ export const UpdateListSchema = z.object({
   collaborators: z.array(z.string()).optional(),
   type: z.string().max(50).optional(),
 })
-
-export const CreateContactSchema = z.object({
-  name: z.string().min(1).max(200),
-  role: z.string().max(200).optional(),
-  phone: z.string().max(50).optional(),
-  email: z.string().max(200).optional(),
-  company: z.string().max(200).optional(),
-  address: z.string().max(500).optional(),
-  notes: z.string().max(2000).optional(),
-  tags: z.array(z.string()).optional(),
-})
-
-export const UpdateContactSchema = CreateContactSchema.partial()
-
-export const CreateNoteSchema = z.object({
-  title: z.string().max(500).optional(),
-  content: z.string().optional(),
-  listId: z.string().nullable().optional(),
-  tags: z.array(z.string()).optional(),
-})
-
-export const UpdateNoteSchema = CreateNoteSchema.partial()
 
 export const CreateFolderSchema = z.object({
   title: z.string().min(1).max(200),
@@ -231,11 +230,6 @@ export const CreateChatSessionSchema = z.object({
   title: z.string().max(200).optional(),
 })
 
-export const JournalSchema = z.object({
-  date: z.string().min(1),
-  content: z.string().optional(),
-})
-
 export const PushSubscribeSchema = z.object({
   subscription: z.object({
     endpoint: z.string().min(1),
@@ -247,22 +241,12 @@ export const PushSubscribeSchema = z.object({
   userAgent: z.string().optional(),
 })
 
-export const CalendarSyncSchema = z.object({
-  calendarId: z.string().optional(),
-})
-
 export const FolderTaskSchema = z.object({
   taskId: z.string().min(1),
 })
 
 export const ListBlocksSchema = z.object({
   blocks: z.unknown(),
-})
-
-export const McpCallSchema = z.object({
-  tool: z.string().min(1),
-  params: z.record(z.string(), z.unknown()).optional(),
-  apiKey: z.string().min(1),
 })
 
 
