@@ -379,6 +379,7 @@ model Task {
   sectionId         String?        @map("section_id") @db.Text
   listId            String?        @map("list_id") @db.Text
   parentId          String?        @map("parent_id") @db.Text
+  clientCommandId   String?        @map("client_command_id") @db.Text
   title             String         @db.Text
   description       String?        @db.Text
   notes             Json?          @db.JsonB
@@ -428,6 +429,7 @@ model Task {
   linkedMemories   Memory[]
 
   @@index([userId, createdAt])
+  @@unique([userId, clientCommandId])
   @@index([userId, status, dueDate])
   @@index([userId, isHabit, order])
   @@index([userId, scheduledStart])

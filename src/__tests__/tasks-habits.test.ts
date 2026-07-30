@@ -113,6 +113,81 @@ describe('task and habit API ownership', () => {
     })
   })
 
+  it('replays a desktop capture idempotently for the same authenticated user', async () => {
+    const existing = taskRecord({
+      id: 'task-desktop',
+      title: 'Desktop capture',
+      clientCommandId: 'desktop-command-1',
+    })
+    prisma.task.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(existing)
+    prisma.task.create.mockResolvedValue(existing)
+
+    await request(createApp())
+      .post('/api/tasks')
+      .set('Authorization', authorization)
+      .send({
+        title: 'Desktop capture',
+        status: 'backlog',
+        clientCommandId: 'desktop-command-1',
+      })
+      .expect(201)
+
+    const replay = await request(createApp())
+      .post('/api/tasks')
+      .set('Authorization', authorization)
+      .send({
+        title: 'Desktop capture',
+        status: 'backlog',
+        clientCommandId: 'desktop-command-1',
+      })
+      .expect(200)
+
+    expect(prisma.task.create).toHaveBeenCalledTimes(1)
+    expect(prisma.task.findFirst).toHaveBeenLastCalledWith({
+      where: {
+        userId: 'owner-123',
+        clientCommandId: 'desktop-command-1',
+      },
+      include: expect.any(Object),
+    })
+    expect(replay.body).toMatchObject({
+      _id: 'task-desktop',
+      title: 'Desktop capture',
+    })
+    expect(replay.body).not.toHaveProperty('clientCommandId')
+  })
+
+  it('returns the winning task when two desktop retries race', async () => {
+    const existing = taskRecord({
+      id: 'task-race-winner',
+      clientCommandId: 'desktop-race-1',
+    })
+    prisma.$transaction.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    )
+    prisma.task.findFirst.mockResolvedValue(existing)
+
+    const response = await request(createApp())
+      .post('/api/tasks')
+      .set('Authorization', authorization)
+      .send({
+        title: 'Racing capture',
+        clientCommandId: 'desktop-race-1',
+      })
+      .expect(200)
+
+    expect(response.body._id).toBe('task-race-winner')
+    expect(prisma.task.findFirst).toHaveBeenCalledWith({
+      where: {
+        userId: 'owner-123',
+        clientCommandId: 'desktop-race-1',
+      },
+      include: expect.any(Object),
+    })
+  })
+
   it('translates public task and reminder enums at the Prisma boundary', async () => {
     prisma.task.create.mockResolvedValue(taskRecord({
       status: 'in_progress',

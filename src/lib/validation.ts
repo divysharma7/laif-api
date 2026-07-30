@@ -36,6 +36,7 @@ export const UnsyncTaskFromGoogleSchema = z.object({
 
 export const CreateTaskSchema = z.object({
   title: z.string().min(1).max(500),
+  clientCommandId: z.string().min(1).max(200).optional(),
   priority: z.enum(['low', 'medium', 'high']).optional().nullable(),
   status: z.enum(['backlog', 'todo', 'in-progress', 'done', 'dropped']).optional(),
   dueDate: z.string().optional().nullable(),
@@ -60,7 +61,9 @@ export const CreateTaskSchema = z.object({
   repeat: z.string().nullable().optional(),
 })
 
-export const UpdateTaskSchema = CreateTaskSchema.partial()
+export const UpdateTaskSchema = CreateTaskSchema
+  .omit({ clientCommandId: true })
+  .partial()
 
 // ── Workflow schemas ───────────────────────────────────────────────────────
 

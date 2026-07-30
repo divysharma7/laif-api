@@ -15,6 +15,13 @@ const taskInclude = {
 
 type ApiRecord = Record<string, any>
 
+function isUniqueConstraintError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && error.code === 'P2002'
+}
+
 function toDatabaseTaskStatus(status: unknown): unknown {
   return status === 'in-progress' ? 'in_progress' : status
 }
@@ -41,7 +48,15 @@ function serializeEmbedded(record: ApiRecord, keepId = false): ApiRecord {
 }
 
 function serializeTask(task: ApiRecord, includeType = true): ApiRecord {
-  const { id, comments = [], reminders = [], completions = [], activities = [], ...rest } = task
+  const {
+    id,
+    clientCommandId: _clientCommandId,
+    comments = [],
+    reminders = [],
+    completions = [],
+    activities = [],
+    ...rest
+  } = task
   const serialized = {
     ...rest,
     status: toApiTaskStatus(rest.status),
@@ -174,22 +189,49 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     const input = parsed.data as ApiRecord
     const reminders = reminderCreates(input.reminders)
     const prisma = getPrisma()
-    const task = await prisma.$transaction(async (tx) => {
-      await validateOwnedRelations(tx, req.userId!, input)
-      return tx.task.create({
-        data: {
-          ...taskScalarData(input),
+    let result: { task: ApiRecord; created: boolean }
+    try {
+      result = await prisma.$transaction(async (tx) => {
+        if (input.clientCommandId) {
+          const existing = await tx.task.findFirst({
+            where: {
+              userId: req.userId!,
+              clientCommandId: input.clientCommandId,
+            },
+            include: taskInclude,
+          })
+          if (existing) return { task: existing, created: false }
+        }
+        await validateOwnedRelations(tx, req.userId!, input)
+        const task = await tx.task.create({
+          data: {
+            ...taskScalarData(input),
+            userId: req.userId!,
+            ...(reminders ? { reminders: { create: reminders } } : {}),
+            activities: {
+              create: { action: 'created', detail: 'Task created', timestamp: new Date() },
+            },
+          } as any,
+          include: taskInclude,
+        })
+        return { task, created: true }
+      })
+    } catch (error) {
+      if (!input.clientCommandId || !isUniqueConstraintError(error)) throw error
+      const task = await prisma.task.findFirst({
+        where: {
           userId: req.userId!,
-          ...(reminders ? { reminders: { create: reminders } } : {}),
-          activities: {
-            create: { action: 'created', detail: 'Task created', timestamp: new Date() },
-          },
-        } as any,
+          clientCommandId: input.clientCommandId,
+        },
         include: taskInclude,
       })
-    })
-    logger.debug({ taskId: task.id }, 'Task created')
-    res.status(201).json(serializeTask(task))
+      if (!task) throw error
+      result = { task, created: false }
+    }
+    if (result.created) {
+      logger.debug({ taskId: result.task.id }, 'Task created')
+    }
+    res.status(result.created ? 201 : 200).json(serializeTask(result.task))
   } catch (err) { next(err) }
 })
 
