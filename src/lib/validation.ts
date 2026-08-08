@@ -44,6 +44,7 @@ export const CreateTaskSchema = z.object({
   scheduledEnd: z.string().optional().nullable(),
   listId: z.string().optional().nullable(),
   description: z.string().optional().nullable(),
+  notes: z.unknown().optional().nullable(),
   estimatedEffort: z.number().optional().nullable(),
   parentId: z.string().optional().nullable(),
   tags: z.array(z.string()).optional(),
