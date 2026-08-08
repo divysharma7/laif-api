@@ -75,6 +75,22 @@ enum FocusSessionStatus {
   extended
 }
 
+enum FocusMode {
+  POMO
+  STOPWATCH
+}
+
+enum FocusTargetType {
+  TASK
+  HABIT
+  NONE
+}
+
+enum FocusRecordSource {
+  TIMER
+  MANUAL
+}
+
 enum FocusEndedReason {
   timer_ended
   user_completed
@@ -166,6 +182,8 @@ model User {
   externalCalendarEvents ExternalCalendarEvent[]
   reminders              Reminder[]
   focusSessions          FocusSession[]
+  focusRecords           FocusRecord[]
+  focusSettings          FocusSettings?
   pomodoroSessions       PomodoroSession[]
   chatSessions           ChatSession[]
   memories               Memory[]
@@ -425,6 +443,7 @@ model Task {
   completions      HabitCompletion[]
   activities       TaskActivity[]
   focusSessions    FocusSession[]
+  focusRecords     FocusRecord[]
   pomodoroSessions PomodoroSession[]
   linkedMemories   Memory[]
 
@@ -601,6 +620,9 @@ model FocusSession {
   userId             String             @map("user_id") @db.Text
   taskId             String?            @map("task_id") @db.Text
   taskTitleSnapshot  String?            @map("task_title_snapshot") @db.Text
+  mode               FocusMode          @default(POMO)
+  targetType         FocusTargetType    @default(NONE) @map("target_type")
+  habitId            String?            @map("habit_id") @db.Text
   plannedDurationMin Int                @default(25) @map("planned_duration_min")
   plannedBreakMin    Int                @default(5) @map("planned_break_min")
   startedAt          DateTime           @map("started_at") @db.Timestamptz(3)
@@ -611,7 +633,7 @@ model FocusSession {
   actualDurationMin  Int                @default(0) @map("actual_duration_min")
   extendedByMin      Int                @default(0) @map("extended_by_min")
   endedReason        FocusEndedReason?  @map("ended_reason")
-  postSessionNote    String?            @map("post_session_note") @db.VarChar(200)
+  postSessionNote    String?            @map("post_session_note") @db.VarChar(2000)
   createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -620,7 +642,52 @@ model FocusSession {
 
   @@index([userId, status, startedAt])
   @@index([userId, taskId, startedAt])
+  @@index([userId, targetType, startedAt])
   @@map("focus_sessions")
+}
+
+model FocusRecord {
+  id                 String            @id @default(cuid()) @db.Text
+  userId             String            @map("user_id") @db.Text
+  targetType         FocusTargetType   @default(NONE) @map("target_type")
+  targetId           String?           @map("target_id") @db.Text
+  targetTitleSnapshot String?          @map("target_title_snapshot") @db.Text
+  startTime          DateTime          @map("start_time") @db.Timestamptz(3)
+  endTime            DateTime          @map("end_time") @db.Timestamptz(3)
+  durationSeconds    Int               @map("duration_seconds")
+  mode               FocusMode
+  pomoCount          Int               @default(0) @map("pomo_count")
+  note               String?           @db.VarChar(2000)
+  source             FocusRecordSource @default(TIMER)
+  timezone           String?           @db.VarChar(50)
+  createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt          DateTime?         @map("deleted_at") @db.Timestamptz(3)
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [targetId], references: [id], onDelete: SetNull)
+
+  @@index([userId, startTime(sort: Desc)])
+  @@index([userId, targetType, targetId])
+  @@map("focus_records")
+}
+
+model FocusSettings {
+  userId                    String   @id @map("user_id") @db.Text
+  pomoDurationSeconds       Int      @default(1500) @map("pomo_duration_seconds")
+  shortBreakDurationSeconds Int      @default(300) @map("short_break_duration_seconds")
+  longBreakDurationSeconds  Int      @default(900) @map("long_break_duration_seconds")
+  longBreakAfterPomos       Int      @default(4) @map("long_break_after_pomos")
+  autoStartBreak            Boolean  @default(false) @map("auto_start_break")
+  autoStartPomo             Boolean  @default(false) @map("auto_start_pomo")
+  notificationsEnabled      Boolean  @default(true) @map("notifications_enabled")
+  soundEnabled              Boolean  @default(true) @map("sound_enabled")
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("focus_settings")
 }
 
 model PomodoroSession {

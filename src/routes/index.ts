@@ -22,6 +22,7 @@ import googleRoutes from './integrations/google.js'
 import alexaRoutes from './alexa.js'
 import posthookRoutes from './posthookListener.js'
 import mcpRoutes from './mcp.js'
+import analyticsRoutes from './analytics.js'
 
 export const routes = Router()
 
@@ -51,3 +52,4 @@ routes.use('/devices', deviceRoutes)
 routes.use('/users', userRoutes)
 routes.use('/integrations/google', googleRoutes)
 routes.use('/mcp', mcpRoutes)
+routes.use('/analytics', analyticsRoutes)

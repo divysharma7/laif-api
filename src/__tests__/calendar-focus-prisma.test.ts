@@ -43,6 +43,12 @@ const prisma = vi.hoisted(() => {
       updateMany: vi.fn(),
       update: vi.fn(),
     },
+    focusRecord: {
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+    },
     pomodoroSession: {
       findMany: vi.fn(),
       create: vi.fn(),
@@ -494,13 +500,111 @@ describe('calendar and focus Prisma routes', () => {
       where: { userId: 'owner-123', status: 'active' },
     }))
     expect(prisma.task.findFirst).toHaveBeenCalledWith({
-      where: { id: 'task-1', userId: 'owner-123' },
+      where: { id: 'task-1', userId: 'owner-123', isHabit: false },
       select: { title: true },
     })
     expect(response.body).toMatchObject({
       _id: 'focus-1',
       taskTitleSnapshot: 'Owned task',
     })
+  })
+
+  it('completes the active session idempotently and creates one focus record', async () => {
+    const activeSession = {
+      id: 'focus-1',
+      userId: 'owner-123',
+      taskId: 'task-1',
+      habitId: null,
+      taskTitleSnapshot: 'Owned task',
+      targetType: 'TASK',
+      mode: 'POMO',
+      plannedDurationMin: 25,
+      extendedByMin: 0,
+      startedAt: new Date(Date.now() - 25 * 60 * 1000),
+      pausedAt: null,
+      totalPausedMs: 0,
+      status: 'active',
+    }
+    prisma.focusSession.findFirst
+      .mockResolvedValueOnce({ id: 'focus-1' })
+      .mockResolvedValueOnce(activeSession)
+      .mockResolvedValueOnce(null)
+    prisma.focusSession.updateMany.mockResolvedValue({ count: 1 })
+    prisma.task.findFirst.mockResolvedValue({ id: 'task-1' })
+    prisma.focusRecord.create.mockResolvedValue({ id: 'record-1' })
+
+    await request(createApp())
+      .post('/api/focus/sessions/active/complete')
+      .set('Authorization', authorization)
+      .set('X-Timezone', 'Asia/Calcutta')
+      .send({ postSessionNote: 'Finished the draft' })
+      .expect(200)
+
+    await request(createApp())
+      .post('/api/focus/sessions/active/complete')
+      .set('Authorization', authorization)
+      .send({})
+      .expect(204)
+
+    expect(prisma.focusRecord.create).toHaveBeenCalledTimes(1)
+    expect(prisma.focusRecord.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'owner-123',
+        targetType: 'TASK',
+        targetId: 'task-1',
+        mode: 'POMO',
+        pomoCount: 1,
+        source: 'TIMER',
+        timezone: 'Asia/Calcutta',
+      }),
+    })
+  })
+
+  it('rejects a manual focus record linked to a non-owned target', async () => {
+    prisma.task.findFirst.mockResolvedValue(null)
+
+    await request(createApp())
+      .post('/api/focus/records')
+      .set('Authorization', authorization)
+      .send({
+        targetType: 'TASK',
+        targetId: 'other-user-task',
+        startTime: '2026-08-09T04:30:00.000Z',
+        endTime: '2026-08-09T05:00:00.000Z',
+        mode: 'STOPWATCH',
+        timezone: 'Asia/Calcutta',
+      })
+      .expect(404)
+
+    expect(prisma.focusRecord.create).not.toHaveBeenCalled()
+  })
+
+  it('uses the exact local-day bounds for Focus overview queries', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-08-08T20:00:00.000Z'))
+    try {
+      prisma.focusSession.findFirst.mockResolvedValue(null)
+      prisma.focusRecord.findMany.mockResolvedValue([])
+
+      await request(createApp())
+        .get('/api/focus/dashboard?timezone=Asia%2FCalcutta')
+        .set('Authorization', authorization)
+        .expect(200)
+
+      expect(prisma.focusRecord.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            userId: 'owner-123',
+            startTime: {
+              gte: new Date('2026-08-08T18:30:00.000Z'),
+              lt: new Date('2026-08-09T18:30:00.000Z'),
+            },
+          }),
+        }),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('scopes Pomodoro updates to the authenticated user', async () => {

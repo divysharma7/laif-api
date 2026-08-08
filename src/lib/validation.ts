@@ -113,13 +113,90 @@ export const CreateFocusSessionSchema = z.object({
   taskId: z.string().nullable().optional(),
   plannedDurationMin: z.number().int().min(1).max(480).optional(),
   plannedBreakMin: z.number().int().min(0).max(120).optional(),
+  mode: z.enum(['POMO', 'STOPWATCH']).optional(),
+  targetType: z.enum(['TASK', 'HABIT', 'NONE']).optional(),
+  targetId: z.string().nullable().optional(),
+  taskTitle: z.string().max(500).optional(),
+}).superRefine((data, ctx) => {
+  const inferredTargetType = data.targetType ?? (data.taskId ? 'TASK' : 'NONE')
+  const targetId = data.targetId ?? data.taskId
+
+  if (inferredTargetType === 'NONE' && targetId) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['targetId'],
+      message: 'targetId must be empty when targetType is NONE',
+    })
+  }
+  if (inferredTargetType !== 'NONE' && !targetId) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['targetId'],
+      message: 'targetId is required when a focus target is selected',
+    })
+  }
 })
 
 export const FocusSessionActionSchema = z.object({
   action: z.enum(['pause', 'resume', 'extend', 'complete', 'cancel']),
   additionalMin: z.number().int().min(1).max(480).optional(),
   endedReason: z.enum(['timer_ended', 'user_completed', 'user_cancelled']).optional(),
-  postSessionNote: z.string().max(200).optional(),
+  postSessionNote: z.string().max(2000).optional(),
+})
+
+export const CompleteActiveFocusSessionSchema = z.object({
+  postSessionNote: z.string().max(2000).optional(),
+})
+
+export const CreateFocusRecordSchema = z.object({
+  targetType: z.enum(['TASK', 'HABIT', 'NONE']),
+  targetId: z.string().nullable().optional(),
+  targetTitleSnapshot: z.string().max(500).nullable().optional(),
+  startTime: z.string().min(1),
+  endTime: z.string().min(1),
+  mode: z.enum(['POMO', 'STOPWATCH']),
+  pomoCount: z.number().int().min(0).optional(),
+  note: z.string().max(2000).nullable().optional(),
+  timezone: z.string().max(50).refine(isValidIanaTimeZone, 'timezone must be a valid IANA time zone').nullable().optional(),
+}).superRefine((data, ctx) => {
+  if (!(new Date(data.endTime) > new Date(data.startTime))) {
+    ctx.addIssue({ code: 'custom', path: ['endTime'], message: 'endTime must be after startTime' })
+  }
+  if (data.targetType === 'NONE' && data.targetId) {
+    ctx.addIssue({ code: 'custom', path: ['targetId'], message: 'targetId must be empty when targetType is NONE' })
+  }
+  if (data.targetType !== 'NONE' && !data.targetId) {
+    ctx.addIssue({ code: 'custom', path: ['targetId'], message: 'targetId is required when a focus target is selected' })
+  }
+})
+
+export const UpdateFocusSettingsSchema = z.object({
+  pomoDurationSeconds: z.number().int().min(60).max(7200).optional(),
+  shortBreakDurationSeconds: z.number().int().min(0).max(3600).optional(),
+  longBreakDurationSeconds: z.number().int().min(0).max(3600).optional(),
+  longBreakAfterPomos: z.number().int().min(1).max(20).optional(),
+  autoStartBreak: z.boolean().optional(),
+  autoStartPomo: z.boolean().optional(),
+  notificationsEnabled: z.boolean().optional(),
+  soundEnabled: z.boolean().optional(),
+}).refine(
+  (value) => Object.values(value).some((field) => field !== undefined),
+  { message: 'at least one setting is required' }
+)
+
+export const FocusDashboardQuerySchema = z.object({
+  timezone: z.string().max(50).refine(isValidIanaTimeZone, 'timezone must be a valid IANA time zone').optional(),
+})
+
+export const FocusRecordsQuerySchema = z.object({
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+})
+
+export const FocusTargetSearchSchema = z.object({
+  type: z.enum(['TASK', 'HABIT']),
+  q: z.string().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
 })
 
 export const CreateEventSchema = z.object({
