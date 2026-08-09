@@ -2,6 +2,9 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
 const prisma = vi.hoisted(() => ({
+  user: {
+    update: vi.fn(),
+  },
   chatSession: {
     findFirst: vi.fn(),
     deleteMany: vi.fn(),
@@ -121,5 +124,22 @@ describe('secondary Prisma route ownership', () => {
       create: expect.objectContaining({ userId: 'owner-123' }),
       update: expect.not.objectContaining({ userId: 'owner-123' }),
     }))
+  })
+
+  it('updates only the authenticated user profile name', async () => {
+    prisma.user.update.mockResolvedValue({ username: 'owner@example.com', name: 'Updated Owner' })
+
+    const response = await request(createApp())
+      .patch('/api/users/me/profile')
+      .set('Authorization', authorization)
+      .send({ name: '  Updated Owner  ' })
+      .expect(200)
+
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'owner-123' },
+      data: { name: 'Updated Owner' },
+      select: { username: true, name: true },
+    })
+    expect(response.body).toEqual({ username: 'owner@example.com', name: 'Updated Owner' })
   })
 })
