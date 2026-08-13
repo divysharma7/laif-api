@@ -26,6 +26,10 @@ function toDatabaseTaskStatus(status: unknown): unknown {
   return status === 'in-progress' ? 'in_progress' : status
 }
 
+function toDatabaseTaskPriority(priority: unknown): unknown {
+  return priority === 'none' ? null : priority
+}
+
 function toDatabaseReminderType(type: unknown): unknown {
   if (type === 'before-start') return 'before_start'
   if (type === 'on-day-at') return 'on_day_at'
@@ -101,6 +105,7 @@ function taskScalarData(input: ApiRecord): ApiRecord {
     if (field in data) data[field] = optionalDate(data[field])
   }
   if ('status' in data) data.status = toDatabaseTaskStatus(data.status)
+  if ('priority' in data) data.priority = toDatabaseTaskPriority(data.priority)
   return data
 }
 

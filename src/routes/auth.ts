@@ -115,4 +115,29 @@ router.get('/me', async (req: Request, res: Response, next: NextFunction) => {
   }
 })
 
+router.put('/me', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' })
+      return
+    }
+
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : ''
+    if (!name || name.length > 200) {
+      res.status(422).json({ error: 'Name must be between 1 and 200 characters' })
+      return
+    }
+
+    const user = await getPrisma().user.update({
+      where: { id: userId },
+      data: { name },
+      select: { username: true, name: true },
+    })
+    res.json({ username: user.username, name: user.name })
+  } catch (err) {
+    next(err)
+  }
+})
+
 export default router
