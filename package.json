@@ -10,6 +10,8 @@
     "test": "vitest",
     "test:run": "vitest run",
     "typecheck": "tsc --noEmit",
+    "security:secrets": "node scripts/check-secrets.mjs",
+    "verify:focus-migration": "node scripts/verify-focus-migration.mjs",
     "prisma:validate": "prisma validate",
     "prisma:generate": "prisma generate",
     "prisma:migration:diff": "prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script"
