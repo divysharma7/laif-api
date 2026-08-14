@@ -12,6 +12,8 @@
     "typecheck": "tsc --noEmit",
     "security:secrets": "node scripts/check-secrets.mjs",
     "verify:focus-migration": "node scripts/verify-focus-migration.mjs",
+    "test:e2e:safety": "node --test scripts/e2e-safety.test.mjs",
+    "test:e2e:fullstack": "node scripts/run-fullstack-e2e.mjs",
     "prisma:validate": "prisma validate",
     "prisma:generate": "prisma generate",
     "prisma:migration:diff": "prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script"

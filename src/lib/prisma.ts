@@ -1,6 +1,7 @@
 import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '../generated/prisma/client.js'
 import { config } from '../config.js'
+import { getPrismaPgConnectionConfig } from './databaseUrl.js'
 
 let prisma: PrismaClient | undefined
 
@@ -10,7 +11,8 @@ export function getPrisma(): PrismaClient {
   }
 
   if (!prisma) {
-    const adapter = new PrismaPg({ connectionString: config.DATABASE_URL })
+    const { connectionString, schema } = getPrismaPgConnectionConfig(config.DATABASE_URL)
+    const adapter = new PrismaPg({ connectionString }, { schema })
     prisma = new PrismaClient({ adapter })
   }
 
