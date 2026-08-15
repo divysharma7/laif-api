@@ -103,28 +103,29 @@ export async function getOverview(userId: string, timezone?: string): Promise<Ov
   const today = localDateKey(now, tz)
   const { start: todayStart, end: tomorrowStart } = utcBoundsForLocalDate(today, tz)
 
-  const [todayRecords, allRecords] = await Promise.all([
-    prisma.focusRecord.findMany({
-      where: {
-        userId,
-        deletedAt: null,
-        startTime: { gte: todayStart, lt: tomorrowStart },
-      },
-      select: { pomoCount: true, durationSeconds: true },
-    }),
-    prisma.focusRecord.findMany({
-      where: {
-        userId,
-        deletedAt: null,
-      },
-      select: { pomoCount: true, durationSeconds: true },
-    }),
-  ])
+  // Keep these aggregates sequential. The driver adapter can otherwise issue
+  // concurrent unnamed prepared statements on the same connection, producing
+  // PostgreSQL 08P01 parameter-count errors under dashboard refresh load.
+  const todayTotals = await prisma.focusRecord.aggregate({
+    where: {
+      userId,
+      deletedAt: null,
+      startTime: { gte: todayStart, lt: tomorrowStart },
+    },
+    _sum: { pomoCount: true, durationSeconds: true },
+  })
+  const allTotals = await prisma.focusRecord.aggregate({
+    where: {
+      userId,
+      deletedAt: null,
+    },
+    _sum: { pomoCount: true, durationSeconds: true },
+  })
 
-  const todayPomo = todayRecords.reduce((sum, r) => sum + r.pomoCount, 0)
-  const todayFocusSeconds = todayRecords.reduce((sum, r) => sum + r.durationSeconds, 0)
-  const totalPomo = allRecords.reduce((sum, r) => sum + r.pomoCount, 0)
-  const totalFocusSeconds = allRecords.reduce((sum, r) => sum + r.durationSeconds, 0)
+  const todayPomo = todayTotals._sum.pomoCount ?? 0
+  const todayFocusSeconds = todayTotals._sum.durationSeconds ?? 0
+  const totalPomo = allTotals._sum.pomoCount ?? 0
+  const totalFocusSeconds = allTotals._sum.durationSeconds ?? 0
 
   return { todayPomo, todayFocusSeconds, totalPomo, totalFocusSeconds }
 }

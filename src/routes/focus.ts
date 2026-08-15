@@ -330,13 +330,13 @@ router.get('/dashboard', async (req: Request, res: Response, next: NextFunction)
     const userId = req.userId!
     const timezone = requestTimezone(req, parsed.data.timezone)
 
-    const [activeSession, overview, recordsResult] = await Promise.all([
-      getPrisma().focusSession.findFirst({
-        where: { userId, status: 'active' },
-      }),
-      focusRecordService.getOverview(userId, timezone),
-      focusRecordService.getRecords({ userId, limit: 50 }),
-    ])
+    // Keep Prisma adapter work sequential within a request. Concurrent unnamed
+    // prepared statements can otherwise collide on the same PG connection.
+    const activeSession = await getPrisma().focusSession.findFirst({
+      where: { userId, status: 'active' },
+    })
+    const overview = await focusRecordService.getOverview(userId, timezone)
+    const recordsResult = await focusRecordService.getRecords({ userId, limit: 50 })
 
     res.json({
       activeSession: activeSession ? serializeSession(activeSession as unknown as ApiRecord) : null,
@@ -567,12 +567,10 @@ router.get('/statistics', async (req: Request, res: Response, next: NextFunction
 
     const validGroupBy = ['day', 'week', 'month'].includes(groupBy) ? groupBy as 'day' | 'week' | 'month' : 'day'
 
-    const [dailyStats, topTasks, topHabits, hourDistribution] = await Promise.all([
-      focusRecordService.getAggregatedStats(userId, validGroupBy, limit, timezone),
-      focusRecordService.getTopTargets(userId, 'TASK', 10),
-      focusRecordService.getTopTargets(userId, 'HABIT', 10),
-      focusRecordService.getFocusByHourOfDay(userId, timezone),
-    ])
+    const dailyStats = await focusRecordService.getAggregatedStats(userId, validGroupBy, limit, timezone)
+    const topTasks = await focusRecordService.getTopTargets(userId, 'TASK', 10)
+    const topHabits = await focusRecordService.getTopTargets(userId, 'HABIT', 10)
+    const hourDistribution = await focusRecordService.getFocusByHourOfDay(userId, timezone)
 
     res.json({
       dailyStats,

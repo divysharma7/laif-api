@@ -7,5 +7,5 @@ export const corsMiddleware = cors({
   origin: config.NODE_ENV === 'development' ? true : origins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'x-request-id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'x-request-id', 'X-Timezone'],
 })

@@ -22,7 +22,6 @@ const backendTscCli = path.join(backendRoot, 'node_modules', 'typescript', 'bin'
 const frontendTscCli = path.join(frontendRoot, 'node_modules', 'typescript', 'bin', 'tsc')
 const viteCli = path.join(frontendRoot, 'node_modules', 'vite', 'bin', 'vite.js')
 const playwrightCli = path.join(frontendRoot, 'node_modules', '@playwright', 'test', 'cli.js')
-const tsxCli = path.join(backendRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs')
 
 const frontendUrl = assertLocalHttpUrl(
   process.env.E2E_FRONTEND_URL ?? 'http://127.0.0.1:4173',
@@ -150,10 +149,21 @@ async function createSchema(adminUrl) {
 async function dropSchema(adminUrl) {
   if (!schemaCreated) return
 
-  await withAdminClient(adminUrl, client => client.query(
-    `DROP SCHEMA IF EXISTS ${quoteGeneratedSchemaName(schemaName)} CASCADE`,
-  ))
-  schemaCreated = false
+  let lastError
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await withAdminClient(adminUrl, client => client.query(
+        `DROP SCHEMA IF EXISTS ${quoteGeneratedSchemaName(schemaName)} CASCADE`,
+      ))
+      schemaCreated = false
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 250 * attempt))
+    }
+  }
+
+  throw lastError
 }
 
 async function reportMigrationFailures(databaseUrl) {
@@ -182,7 +192,7 @@ async function reportMigrationFailures(databaseUrl) {
 
 async function stopChildren() {
   for (const { child } of children.reverse()) {
-    if (!child.killed) child.kill('SIGTERM')
+    if (child.exitCode === null) child.kill('SIGTERM')
   }
 
   await Promise.all(children.map(({ child }) => new Promise(resolve => {
@@ -191,7 +201,7 @@ async function stopChildren() {
       return
     }
     const timeout = setTimeout(() => {
-      if (!child.killed) child.kill('SIGKILL')
+      if (child.exitCode === null) child.kill('SIGKILL')
       resolve()
     }, 5_000)
     child.once('exit', () => {
@@ -230,6 +240,11 @@ async function main() {
     VITE_USE_MOCK_AUTH: 'false',
   }
 
+  run(process.execPath, [prismaCli, 'generate'], {
+    cwd: backendRoot,
+    env: backendEnv,
+  })
+
   try {
     run(process.execPath, [prismaCli, 'migrate', 'deploy'], {
       cwd: backendRoot,
@@ -245,11 +260,11 @@ async function main() {
   run(process.execPath, [frontendTscCli, '--noEmit'], { cwd: frontendRoot, env: frontendEnv })
   run(process.execPath, [viteCli, 'build', '--mode', 'e2e'], { cwd: frontendRoot, env: frontendEnv })
 
-  startLoggedProcess('api', process.execPath, [tsxCli, path.join(backendRoot, 'dist', 'index.js')], {
+  startLoggedProcess('api', process.execPath, [path.join(backendRoot, 'dist', 'index.js')], {
     cwd: backendRoot,
     env: backendEnv,
   })
-  await waitForHttp(`${apiUrl}/ready`, 'API readiness')
+  await waitForHttp(`${apiUrl}/ready`, 'API readiness', 120_000)
 
   startLoggedProcess(
     'frontend',
