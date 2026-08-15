@@ -44,6 +44,7 @@ const prisma = vi.hoisted(() => {
       update: vi.fn(),
     },
     focusRecord: {
+      aggregate: vi.fn(),
       findMany: vi.fn(),
       findFirst: vi.fn(),
       create: vi.fn(),
@@ -584,6 +585,9 @@ describe('calendar and focus Prisma routes', () => {
     vi.setSystemTime(new Date('2026-08-08T20:00:00.000Z'))
     try {
       prisma.focusSession.findFirst.mockResolvedValue(null)
+      prisma.focusRecord.aggregate.mockResolvedValue({
+        _sum: { pomoCount: null, durationSeconds: null },
+      })
       prisma.focusRecord.findMany.mockResolvedValue([])
 
       await request(createApp())
@@ -591,7 +595,7 @@ describe('calendar and focus Prisma routes', () => {
         .set('Authorization', authorization)
         .expect(200)
 
-      expect(prisma.focusRecord.findMany).toHaveBeenCalledWith(
+      expect(prisma.focusRecord.aggregate).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
             userId: 'owner-123',
@@ -701,10 +705,13 @@ describe('calendar and focus Prisma routes', () => {
     })
     prisma.calendarAccount.upsert.mockResolvedValue({ id: 'account-1' })
 
-    await request(createApp())
+    const callbackResponse = await request(createApp())
       .get(`/api/integrations/google/callback?code=test-code&state=${encodeURIComponent(state)}`)
       .set('Authorization', authorization)
       .expect(302)
+
+    expect(callbackResponse.headers.location)
+      .toBe('http://localhost:3000/settings?section=integrations&google=connected')
 
     const upsert = prisma.calendarAccount.upsert.mock.calls[0][0]
     expect(upsert.where).toEqual({
@@ -742,7 +749,7 @@ describe('calendar and focus Prisma routes', () => {
       .expect(302)
 
     expect(response.headers.location)
-      .toBe('http://localhost:3000/settings?tab=integrations&google=cancelled')
+      .toBe('http://localhost:3000/settings?section=integrations&google=cancelled')
     expect(prisma.oAuthState.updateMany).toHaveBeenCalled()
     expect(googleAuth.getToken).not.toHaveBeenCalled()
   })

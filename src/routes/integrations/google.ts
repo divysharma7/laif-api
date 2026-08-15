@@ -38,7 +38,7 @@ function googleIntegrationConfigured(): boolean {
 
 function settingsRedirect(status: 'connected' | 'cancelled' | 'error'): string {
   const url = new URL('/settings', config.FRONTEND_URL)
-  url.searchParams.set('tab', 'integrations')
+  url.searchParams.set('section', 'integrations')
   url.searchParams.set('google', status)
   return url.toString()
 }
