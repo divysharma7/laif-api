@@ -5,6 +5,7 @@ const prisma = vi.hoisted(() => ({
   task: { count: vi.fn(), findMany: vi.fn() },
   focusRecord: { aggregate: vi.fn(), findMany: vi.fn() },
   habitCompletion: { findMany: vi.fn() },
+  list: { count: vi.fn(), findMany: vi.fn() },
 }))
 
 vi.mock('../lib/prisma.js', () => ({
@@ -18,13 +19,27 @@ const { signToken } = await import('../lib/auth.js')
 describe('consolidated statistics', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    prisma.task.count.mockResolvedValueOnce(12).mockResolvedValueOnce(4).mockResolvedValueOnce(8)
+    prisma.task.count
+      .mockResolvedValueOnce(12)
+      .mockResolvedValueOnce(4)
+      .mockResolvedValueOnce(8)
+      .mockResolvedValue(1)
     prisma.task.findMany
       .mockResolvedValueOnce([{ completedAt: new Date() }])
       .mockResolvedValueOnce([{ id: 'habit-1', title: 'Walk', streakCurrent: 3, streakBest: 7 }])
-    prisma.focusRecord.aggregate.mockResolvedValue({ _sum: { durationSeconds: 7200 }, _count: { id: 4 } })
-    prisma.focusRecord.findMany.mockResolvedValue([{ startTime: new Date(), durationSeconds: 1500 }])
+      .mockResolvedValueOnce([{ completedAt: new Date() }])
+      .mockResolvedValue([])
+    prisma.focusRecord.aggregate.mockResolvedValue({
+      _sum: { durationSeconds: 7200, pomoCount: 4 },
+      _count: { id: 4 },
+    })
+    prisma.focusRecord.findMany
+      .mockResolvedValueOnce([{ startTime: new Date(), durationSeconds: 1500, pomoCount: 1 }])
+      .mockResolvedValueOnce([{ startTime: new Date() }])
+      .mockResolvedValue([])
     prisma.habitCompletion.findMany.mockResolvedValue([{ date: new Date(), status: 'achieved' }])
+    prisma.list.count.mockResolvedValue(2)
+    prisma.list.findMany.mockResolvedValue([])
   })
 
   it('returns user-owned task, focus, and habit metrics', async () => {
