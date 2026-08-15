@@ -231,7 +231,7 @@ export const FocusTargetSearchSchema = z.object({
 
 export const StatisticsTaskQuerySchema = z.object({
   range: z.enum(['day', 'week', 'month']).default('day'),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  date: z.string().refine(isValidIsoDate, 'date must be a valid YYYY-MM-DD value').optional(),
   timezone: z.string().max(50).refine(isValidIanaTimeZone, 'timezone must be a valid IANA time zone').optional(),
 })
 
