@@ -1,8 +1,10 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getPrisma } from '../lib/prisma.js'
 import { CreateTaskSchema, UpdateTaskSchema, TaskScheduleSchema, TaskReorderSchema, TaskReparentSchema, parseBody } from '../lib/validation.js'
-import { ValidationError, NotFoundError } from '../lib/errors.js'
+import { AppError, ValidationError, NotFoundError } from '../lib/errors.js'
 import { logger } from '../lib/logger.js'
+import { replaceTaskNotificationSchedules } from '../services/taskNotificationService.js'
+import { rollForwardRecurringTask } from '../services/taskRecurrenceService.js'
 
 const router = Router()
 
@@ -100,7 +102,7 @@ function reminderCreates(reminders: unknown): ApiRecord[] | undefined {
 }
 
 function taskScalarData(input: ApiRecord): ApiRecord {
-  const { reminders: _reminders, ...data } = input
+  const { reminders: _reminders, expectedVersion: _expectedVersion, ...data } = input
   for (const field of ['dueDate', 'scheduledStart', 'scheduledEnd', 'completedAt']) {
     if (field in data) data[field] = optionalDate(data[field])
   }
@@ -152,8 +154,19 @@ async function updateOwnedTask(
 ) {
   const prisma = getPrisma()
   return prisma.$transaction(async (tx) => {
-    const existing = await tx.task.findFirst({ where: { id, userId }, select: { id: true } })
+    const existing = await tx.task.findFirst({
+      where: { id, userId },
+      select: { id: true, version: true },
+    })
     if (!existing) throw new NotFoundError('Task', id)
+    if (input.expectedVersion !== undefined && input.expectedVersion !== existing.version) {
+      throw new AppError(
+        'Task changed on another device. Refresh before saving again.',
+        'VERSION_CONFLICT',
+        409,
+        { currentVersion: existing.version },
+      )
+    }
     await validateOwnedRelations(tx, userId, input)
 
     const reminders = reminderCreates(input.reminders)
@@ -161,15 +174,19 @@ async function updateOwnedTask(
       await tx.taskReminder.deleteMany({ where: { taskId: id } })
     }
 
-    return tx.task.update({
+    const task = await tx.task.update({
       where: { id },
       data: {
         ...taskScalarData(input),
+        version: { increment: 1 },
         ...(reminders ? { reminders: { create: reminders } } : {}),
         ...(activity ? { activities: { create: activity } } : {}),
       } as any,
       include: taskInclude,
     })
+    await replaceTaskNotificationSchedules(userId, task, tx)
+    if (input.status === 'done') await rollForwardRecurringTask(userId, task, tx)
+    return task
   })
 }
 
@@ -219,6 +236,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
           } as any,
           include: taskInclude,
         })
+        await replaceTaskNotificationSchedules(req.userId!, task, tx)
         return { task, created: true }
       })
     } catch (error) {
@@ -291,6 +309,25 @@ router.delete('/:id', async (req: Request, res: Response, next: NextFunction) =>
         select: { id: true },
       })
       if (!existing) throw new NotFoundError('Task', req.params.id)
+      await tx.notificationSchedule.deleteMany({
+        where: {
+          userId: req.userId!,
+          status: 'pending',
+          payload: { path: ['taskId'], equals: req.params.id },
+        },
+      })
+      const deletedTasks = await tx.task.findMany({
+        where: { userId: req.userId!, OR: [{ id: req.params.id }, { parentId: req.params.id }] },
+        select: { id: true },
+      })
+      const deletedAt = new Date()
+      for (const task of deletedTasks) {
+        await tx.taskTombstone.upsert({
+          where: { taskId: task.id },
+          update: { userId: req.userId!, deletedAt },
+          create: { taskId: task.id, userId: req.userId!, deletedAt },
+        })
+      }
       await tx.task.deleteMany({ where: { parentId: req.params.id, userId: req.userId! } })
       await tx.task.delete({ where: { id: req.params.id } })
     })

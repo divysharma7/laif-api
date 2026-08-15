@@ -1,6 +1,28 @@
 import { z } from 'zod'
 import { isValidIanaTimeZone, isValidIsoDate } from './timeZone.js'
 
+const IsoDateTimeSchema = z.string().refine(
+  value => !Number.isNaN(Date.parse(value)),
+  'must be an ISO date-time value',
+)
+const TimeOfDaySchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'must use HH:mm')
+
+const TaskReminderSchema = z.object({
+  id: z.string().min(1).max(200),
+  type: z.enum(['before-start', 'on-day-at', 'absolute']),
+  offsetMinutes: z.number().int().min(0).max(525_600).optional(),
+  timeOfDay: TimeOfDaySchema.nullable().optional(),
+  absoluteTime: IsoDateTimeSchema.nullable().optional(),
+  sent: z.boolean().optional(),
+}).superRefine((value, context) => {
+  if (value.type === 'on-day-at' && !value.timeOfDay) {
+    context.addIssue({ code: 'custom', path: ['timeOfDay'], message: 'timeOfDay is required' })
+  }
+  if (value.type === 'absolute' && !value.absoluteTime) {
+    context.addIssue({ code: 'custom', path: ['absoluteTime'], message: 'absoluteTime is required' })
+  }
+})
+
 export const AgendaQuerySchema = z.object({
   date: z.string().refine(isValidIsoDate, 'date must be a valid YYYY-MM-DD value'),
   timeZone: z.string().refine(isValidIanaTimeZone, 'timeZone must be a valid IANA time zone').optional(),
@@ -34,37 +56,44 @@ export const UnsyncTaskFromGoogleSchema = z.object({
   deleteGoogleEvent: z.boolean().default(false),
 })
 
+export const RichTextDocumentSchema = z.object({
+  version: z.literal(1),
+  blocks: z.array(z.object({
+    type: z.enum(['paragraph', 'heading', 'bullet', 'numbered', 'checklist', 'quote', 'code']),
+    text: z.string().max(10_000),
+    checked: z.boolean().optional(),
+    level: z.number().int().min(1).max(3).optional(),
+    language: z.string().max(50).optional(),
+  }).strict()).max(500),
+}).strict()
+
 export const CreateTaskSchema = z.object({
   title: z.string().min(1).max(500),
   clientCommandId: z.string().min(1).max(200).optional(),
   priority: z.enum(['low', 'medium', 'high', 'none']).optional().nullable(),
+  isUrgent: z.boolean().optional().nullable(),
+  isImportant: z.boolean().optional().nullable(),
   status: z.enum(['backlog', 'todo', 'in-progress', 'done', 'dropped']).optional(),
-  dueDate: z.string().optional().nullable(),
-  scheduledStart: z.string().optional().nullable(),
-  scheduledEnd: z.string().optional().nullable(),
+  dueDate: IsoDateTimeSchema.optional().nullable(),
+  scheduledStart: IsoDateTimeSchema.optional().nullable(),
+  scheduledEnd: IsoDateTimeSchema.optional().nullable(),
   listId: z.string().optional().nullable(),
   description: z.string().optional().nullable(),
-  notes: z.unknown().optional().nullable(),
-  estimatedEffort: z.number().optional().nullable(),
+  notes: RichTextDocumentSchema.optional().nullable(),
+  estimatedEffort: z.number().min(0).max(10_000).optional().nullable(),
   parentId: z.string().optional().nullable(),
-  tags: z.array(z.string()).optional(),
+  tags: z.array(z.string().min(1).max(100)).max(100).optional(),
   kanbanOrder: z.number().optional(),
   sectionId: z.string().optional().nullable(),
   workflowId: z.string().optional().nullable(),
-  reminders: z.array(z.object({
-    id: z.string(),
-    type: z.enum(['before-start', 'on-day-at', 'absolute']),
-    offsetMinutes: z.number().optional(),
-    timeOfDay: z.string().nullable().optional(),
-    absoluteTime: z.string().nullable().optional(),
-    sent: z.boolean().optional(),
-  })).optional(),
-  repeat: z.string().nullable().optional(),
+  reminders: z.array(TaskReminderSchema).max(50).optional(),
+  repeat: z.enum(['daily', 'weekdays', 'weekly', 'monthly', 'yearly']).nullable().optional(),
 })
 
 export const UpdateTaskSchema = CreateTaskSchema
   .omit({ clientCommandId: true })
   .partial()
+  .extend({ expectedVersion: z.number().int().min(1).optional() })
 
 // ── Workflow schemas ───────────────────────────────────────────────────────
 
@@ -200,6 +229,12 @@ export const FocusTargetSearchSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20),
 })
 
+export const StatisticsTaskQuerySchema = z.object({
+  range: z.enum(['day', 'week', 'month']).default('day'),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  timezone: z.string().max(50).refine(isValidIanaTimeZone, 'timezone must be a valid IANA time zone').optional(),
+})
+
 export const CreateEventSchema = z.object({
   title: z.string().min(1).max(500),
   description: z.string().max(2000).optional().nullable(),
@@ -314,6 +349,109 @@ export const FocusPreferencesSchema = z.object({
   soundOnComplete: z.boolean().optional(),
   showInSidebar: z.boolean().optional(),
   keyboardShortcutsEnabled: z.boolean().optional(),
+})
+
+export const OnboardingStateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  priorities: z.array(z.string().min(1).max(50)).max(8).optional(),
+  connectCalendar: z.boolean().optional(),
+  termsAccepted: z.boolean().optional(),
+  termsVersion: z.string().min(1).max(50).optional(),
+  emailsOptIn: z.boolean().optional(),
+  timezone: z.string().max(50)
+    .refine(isValidIanaTimeZone, 'timezone must be a valid IANA time zone')
+    .optional(),
+  completed: z.boolean().optional(),
+}).superRefine((value, context) => {
+  if (!Object.values(value).some(field => field !== undefined)) {
+    context.addIssue({ code: 'custom', message: 'at least one onboarding field is required' })
+  }
+  if (value.completed === true && value.termsAccepted !== true) {
+    context.addIssue({
+      code: 'custom',
+      path: ['termsAccepted'],
+      message: 'terms must be accepted before onboarding can be completed',
+    })
+  }
+  if (value.termsAccepted === true && !value.termsVersion) {
+    context.addIssue({
+      code: 'custom',
+      path: ['termsVersion'],
+      message: 'termsVersion is required when terms are accepted',
+    })
+  }
+})
+
+export const GettingStartedStateSchema = z.object({
+  checkedStepIds: z.array(z.string().min(1).max(100)).max(50).optional(),
+  dismissed: z.boolean().optional(),
+  completed: z.boolean().optional(),
+}).refine(
+  value => Object.values(value).some(field => field !== undefined),
+  { message: 'at least one getting-started field is required' },
+)
+
+const RitualDecisionActionSchema = z.enum(['complete', 'move', 'unschedule', 'drop'])
+const RitualTimestampSchema = z.string().refine(
+  value => !Number.isNaN(Date.parse(value)),
+  'timestamp must be an ISO date-time value',
+)
+
+export const DailyRitualSchema = z.object({
+  date: z.string().refine(isValidIsoDate, 'date must be a valid YYYY-MM-DD value'),
+  outcome: z.string().max(500).nullable().optional(),
+  acceptedWindows: z.array(z.string().min(1).max(200)).max(20).optional(),
+  planCompleted: z.boolean().optional(),
+  taskDecisions: z.record(z.string().min(1), RitualDecisionActionSchema).optional(),
+  shutdownCompleted: z.boolean().optional(),
+  selectedTaskIds: z.array(z.string().min(1)).max(50).optional(),
+  protectedWindows: z.array(z.object({
+    start: z.string().min(1),
+    end: z.string().min(1),
+  })).max(10).optional(),
+  decisions: z.array(z.object({
+    taskId: z.string().min(1),
+    action: RitualDecisionActionSchema,
+    dueDate: z.string().nullable().optional(),
+  })).max(100).optional(),
+})
+
+export const CloseDaySchema = z.object({
+  date: z.string().refine(isValidIsoDate, 'date must be a valid YYYY-MM-DD value'),
+  commandId: z.string().min(1).max(200),
+  decisions: z.array(z.object({
+    taskId: z.string().min(1),
+    action: RitualDecisionActionSchema,
+    scheduledStart: RitualTimestampSchema.nullable().optional(),
+    scheduledEnd: RitualTimestampSchema.nullable().optional(),
+  })).max(100),
+}).superRefine((value, context) => {
+  const ids = new Set<string>()
+  value.decisions.forEach((decision, index) => {
+    if (ids.has(decision.taskId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['decisions', index, 'taskId'],
+        message: 'each task may have only one decision',
+      })
+    }
+    ids.add(decision.taskId)
+    if (decision.action === 'move') {
+      if (!decision.scheduledStart || !decision.scheduledEnd) {
+        context.addIssue({
+          code: 'custom',
+          path: ['decisions', index],
+          message: 'move decisions require scheduledStart and scheduledEnd',
+        })
+      } else if (new Date(decision.scheduledEnd) <= new Date(decision.scheduledStart)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['decisions', index, 'scheduledEnd'],
+          message: 'scheduledEnd must be after scheduledStart',
+        })
+      }
+    }
+  })
 })
 
 export const CreateChatSessionSchema = z.object({

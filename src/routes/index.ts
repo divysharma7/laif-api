@@ -23,6 +23,10 @@ import alexaRoutes from './alexa.js'
 import posthookRoutes from './posthookListener.js'
 import mcpRoutes from './mcp.js'
 import analyticsRoutes from './analytics.js'
+import ritualRoutes from './rituals.js'
+import attachmentRoutes from './attachments.js'
+import statisticsRoutes from './statistics.js'
+import syncRoutes from './sync.js'
 
 export const routes = Router()
 
@@ -33,6 +37,7 @@ routes.use('/alexa', alexaRoutes)
 
 // Protected routes (auth middleware applied globally in app.ts)
 routes.use('/tasks', taskRoutes)
+routes.use('/tasks/:taskId/attachments', attachmentRoutes)
 routes.use('/habits', habitRoutes)
 routes.use('/focus', focusRoutes)
 routes.use('/calendar', calendarRoutes)
@@ -53,3 +58,6 @@ routes.use('/users', userRoutes)
 routes.use('/integrations/google', googleRoutes)
 routes.use('/mcp', mcpRoutes)
 routes.use('/analytics', analyticsRoutes)
+routes.use('/rituals', ritualRoutes)
+routes.use('/statistics', statisticsRoutes)
+routes.use('/sync', syncRoutes)

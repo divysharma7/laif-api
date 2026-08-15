@@ -85,6 +85,20 @@ export function utcBoundsForLocalDate(
   }
 }
 
+export function utcForLocalDateTime(
+  date: string,
+  time: string,
+  timeZone: string,
+): Date {
+  const [year, month, day] = date.split('-').map(Number)
+  const [hour, minute] = time.split(':').map(Number)
+  const localAsUtc = Date.UTC(year, month - 1, day, hour, minute)
+  let candidate = localAsUtc - offsetAt(new Date(localAsUtc), timeZone)
+  const corrected = localAsUtc - offsetAt(new Date(candidate), timeZone)
+  if (corrected !== candidate) candidate = corrected
+  return new Date(candidate)
+}
+
 export function localDateKey(date: Date, timeZone: string): string {
   const parts = partsFor(date, timeZone)
   return [

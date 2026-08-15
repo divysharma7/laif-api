@@ -14,6 +14,11 @@ const prisma = vi.hoisted(() => ({
   taskReminder: { deleteMany: vi.fn() },
   taskComment: { create: vi.fn() },
   habitCompletion: { upsert: vi.fn() },
+  notificationSchedule: {
+    deleteMany: vi.fn(),
+    createMany: vi.fn(),
+  },
+  taskTombstone: { upsert: vi.fn() },
   list: { findFirst: vi.fn() },
   workflow: { findFirst: vi.fn() },
   workflowColumn: { findFirst: vi.fn() },
@@ -52,7 +57,7 @@ describe('task and habit API ownership', () => {
   })
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
     prisma.$transaction.mockImplementation(async (operation: (client: typeof prisma) => unknown) => operation(prisma))
   })
 
@@ -287,18 +292,49 @@ describe('task and habit API ownership', () => {
 
     expect(prisma.task.findFirst).toHaveBeenCalledWith({
       where: { id: 'task-3', userId: 'owner-123' },
-      select: { id: true },
+      select: { id: true, version: true },
     })
     expect(prisma.task.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'task-3' },
-      data: { title: 'Updated task' },
+      data: { title: 'Updated task', version: { increment: 1 } },
     }))
+  })
+
+  it('rejects a stale task update before writing', async () => {
+    prisma.task.findFirst.mockResolvedValue({ id: 'task-3', version: 4 })
+
+    const response = await request(createApp())
+      .put('/api/tasks/task-3')
+      .set('Authorization', authorization)
+      .send({ title: 'Stale update', expectedVersion: 3 })
+      .expect(409)
+
+    expect(response.body.error).toMatchObject({
+      code: 'VERSION_CONFLICT',
+      details: { currentVersion: 4 },
+    })
+    expect(prisma.task.update).not.toHaveBeenCalled()
+  })
+
+  it('rejects malformed reminder times before writing', async () => {
+    await request(createApp())
+      .post('/api/tasks')
+      .set('Authorization', authorization)
+      .send({
+        title: 'Invalid reminder',
+        reminders: [{ id: 'reminder-1', type: 'on-day-at', timeOfDay: '99:75' }],
+      })
+      .expect(422)
+
+    expect(prisma.task.create).not.toHaveBeenCalled()
   })
 
   it('scopes task deletion and subtask cleanup to the authenticated user', async () => {
     prisma.task.findFirst.mockResolvedValue({ id: 'task-3' })
     prisma.task.deleteMany.mockResolvedValue({ count: 2 })
     prisma.task.delete.mockResolvedValue(taskRecord({ id: 'task-3' }))
+    prisma.task.findMany.mockResolvedValue([{ id: 'task-3' }, { id: 'child-1' }])
+    prisma.taskTombstone.upsert.mockResolvedValue({})
 
     const response = await request(createApp())
       .delete('/api/tasks/task-3')
@@ -312,6 +348,12 @@ describe('task and habit API ownership', () => {
     expect(prisma.task.deleteMany).toHaveBeenCalledWith({
       where: { parentId: 'task-3', userId: 'owner-123' },
     })
+    expect(prisma.taskTombstone.upsert).toHaveBeenCalledTimes(2)
+    expect(prisma.taskTombstone.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { taskId: 'task-3' },
+      update: expect.objectContaining({ userId: 'owner-123', deletedAt: expect.any(Date) }),
+      create: expect.objectContaining({ taskId: 'task-3', userId: 'owner-123', deletedAt: expect.any(Date) }),
+    }))
     expect(response.body).toEqual({ success: true })
   })
 

@@ -9,6 +9,37 @@ import { logger } from '../lib/logger.js'
 const { compare, hash } = bcryptjs
 const router = Router()
 
+const userSessionSelect = {
+  id: true,
+  username: true,
+  name: true,
+  timezone: true,
+  onboardingState: true,
+  onboardingCompletedAt: true,
+  gettingStartedState: true,
+} as const
+
+function sessionUser(user: {
+  id: string
+  username: string
+  name: string
+  timezone?: string
+  onboardingState?: unknown | null
+  onboardingCompletedAt?: Date | null
+  gettingStartedState?: unknown
+}) {
+  return {
+    id: user.id,
+    username: user.username,
+    name: user.name,
+    timezone: user.timezone ?? 'UTC',
+    onboardingState: user.onboardingState ?? {},
+    onboardingCompletedAt: user.onboardingCompletedAt ?? null,
+    gettingStartedState: user.gettingStartedState ?? {},
+    onboardingRequired: user.onboardingState != null && !user.onboardingCompletedAt,
+  }
+}
+
 const cookieOpts = () => ({
   httpOnly: true,
   secure: config.NODE_ENV === 'production',
@@ -48,7 +79,7 @@ router.post('/login', authLimiter, async (req: Request, res: Response, next: Nex
     const token = await signToken({ userId: user.id, username: user.username, name: user.name })
     logger.info({ userId: user.id }, 'User logged in')
     res.cookie(COOKIE_NAME, token, cookieOpts())
-    res.json({ ok: true, token, username: user.username, name: user.name })
+    res.json({ ok: true, token, ...sessionUser(user) })
   } catch (err) {
     next(err)
   }
@@ -79,11 +110,18 @@ router.post('/signup', authLimiter, async (req: Request, res: Response, next: Ne
     }
 
     const passwordHash = await hash(password, 12)
-    const user = await prisma.user.create({ data: { username, passwordHash, name } })
+    const user = await prisma.user.create({
+      data: {
+        username,
+        passwordHash,
+        name,
+        onboardingState: { startedAt: new Date().toISOString() },
+      },
+    })
     const token = await signToken({ userId: user.id, username: user.username, name: user.name })
     logger.info({ userId: user.id }, 'User signed up')
     res.cookie(COOKIE_NAME, token, cookieOpts())
-    res.json({ ok: true, token, username: user.username, name: user.name })
+    res.json({ ok: true, token, ...sessionUser(user) })
   } catch (err) {
     next(err)
   }
@@ -103,13 +141,13 @@ router.get('/me', async (req: Request, res: Response, next: NextFunction) => {
     }
     const user = await getPrisma().user.findUnique({
       where: { id: userId },
-      select: { username: true, name: true },
+      select: userSessionSelect,
     })
     if (!user) {
       res.status(404).json({ error: 'User not found' })
       return
     }
-    res.json({ username: user.username, name: user.name })
+    res.json(sessionUser(user))
   } catch (err) {
     next(err)
   }
@@ -132,9 +170,9 @@ router.put('/me', async (req: Request, res: Response, next: NextFunction) => {
     const user = await getPrisma().user.update({
       where: { id: userId },
       data: { name },
-      select: { username: true, name: true },
+      select: userSessionSelect,
     })
-    res.json({ username: user.username, name: user.name })
+    res.json(sessionUser(user))
   } catch (err) {
     next(err)
   }

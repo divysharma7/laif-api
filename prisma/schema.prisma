@@ -124,6 +124,7 @@ enum MemoryType {
 }
 
 enum NotificationType {
+  task_reminder
   habit_reminder
   checkin_nudge
   streak_milestone
@@ -144,6 +145,11 @@ enum PushDeviceType {
 
 enum ExternalCalendarSource {
   google
+}
+
+enum DailyRitualType {
+  morning
+  evening
 }
 
 enum CalendarConnectionStatus {
@@ -170,10 +176,14 @@ model User {
   habitSettings           Json?    @map("habit_settings") @db.JsonB
   focusPreferences        Json?    @map("focus_preferences") @db.JsonB
   calendarPreferences     Json?    @map("calendar_preferences") @db.JsonB
+  onboardingState         Json?    @map("onboarding_state") @db.JsonB
+  onboardingCompletedAt   DateTime? @map("onboarding_completed_at") @db.Timestamptz(3)
+  gettingStartedState     Json?    @map("getting_started_state") @db.JsonB
   createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt               DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tasks                  Task[]
+  taskTombstones         TaskTombstone[]
   lists                  List[]
   listGroups             ListGroup[]
   listCollaborations     ListCollaborator[]
@@ -192,6 +202,7 @@ model User {
   pushDevices            UserPushDevice[]
   devices                Device[]
   webPushSubscriptions   WebPushSubscription[]
+  dailyRituals           DailyRitual[]
   oauthStates            OAuthState[]
   calendarAccounts       CalendarAccount[]
   calendars              Calendar[]
@@ -404,6 +415,8 @@ model Task {
   notes             Json?          @db.JsonB
   dueDate           DateTime?      @map("due_date") @db.Timestamptz(3)
   priority          TaskPriority?  @default(medium)
+  isUrgent          Boolean?       @map("is_urgent")
+  isImportant       Boolean?       @map("is_important")
   status            TaskStatus     @default(backlog)
   color             String         @default("#34d399") @db.Text
   tags              String[]       @default([])
@@ -430,6 +443,7 @@ model Task {
   habitIcon         String?        @map("habit_icon") @db.Text
   habitColor        String?        @map("habit_color") @db.Text
   kanbanOrder       Float          @default(0) @map("kanban_order")
+  version           Int            @default(1)
   createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -443,6 +457,7 @@ model Task {
   reminders        TaskReminder[]
   completions      HabitCompletion[]
   activities       TaskActivity[]
+  attachments      TaskAttachment[]
   focusSessions    FocusSession[]
   focusRecords     FocusRecord[]
   pomodoroSessions PomodoroSession[]
@@ -456,7 +471,19 @@ model Task {
   @@index([userId, parentId, order])
   @@index([userId, listId])
   @@index([userId, workflowId, sectionId, kanbanOrder])
+  @@index([userId, isImportant, isUrgent])
   @@map("tasks")
+}
+
+model TaskTombstone {
+  taskId    String   @id @map("task_id") @db.Text
+  userId    String   @map("user_id") @db.Text
+  deletedAt DateTime @default(now()) @map("deleted_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, deletedAt])
+  @@map("task_tombstones")
 }
 
 model TaskComment {
@@ -782,6 +809,39 @@ model NotificationSchedule {
   @@index([userId, status, scheduledFor])
   @@index([status, scheduledFor])
   @@map("notification_schedules")
+}
+
+model TaskAttachment {
+  id          String   @id @default(cuid()) @db.Text
+  taskId      String   @map("task_id") @db.Text
+  filename    String   @db.VarChar(255)
+  contentType String   @map("content_type") @db.VarChar(100)
+  size        Int
+  data        Bytes
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
+  @@map("task_attachments")
+}
+
+model DailyRitual {
+  id          String          @id @default(cuid()) @db.Text
+  userId      String          @map("user_id") @db.Text
+  date        DateTime        @db.Date
+  type        DailyRitualType
+  outcome     String?         @db.VarChar(500)
+  payload     Json            @default("{}") @db.JsonB
+  completedAt DateTime        @default(now()) @map("completed_at") @db.Timestamptz(3)
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date, type])
+  @@index([userId, date(sort: Desc)])
+  @@map("daily_rituals")
 }
 
 model UserPushDevice {

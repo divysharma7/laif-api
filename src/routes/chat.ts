@@ -2,8 +2,39 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getPrisma } from '../lib/prisma.js'
 import { CreateChatSessionSchema, parseBody } from '../lib/validation.js'
 import { ValidationError, NotFoundError } from '../lib/errors.js'
+import { answerUserLocally } from '../services/assistantService.js'
 
 const router = Router()
+
+function isRetryableWriteConflict(error: unknown) {
+  if (!error || typeof error !== 'object' || !('code' in error)) return false
+  return (error as { code?: string }).code === 'P2034'
+    || (error as { code?: string }).code === 'P2002'
+}
+
+async function persistTurn(sessionId: string, message: string, reply: string) {
+  const prisma = getPrisma()
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await prisma.$transaction(async transaction => {
+        const position = await transaction.chatSessionMessage.count({ where: { sessionId } })
+        await transaction.chatSessionMessage.createMany({
+          data: [
+            { sessionId, position, role: 'user', content: message },
+            { sessionId, position: position + 1, role: 'assistant', content: reply },
+          ],
+        })
+        await transaction.chatSession.update({
+          where: { id: sessionId },
+          data: { updatedAt: new Date() },
+        })
+      }, { isolationLevel: 'Serializable' })
+      return
+    } catch (error) {
+      if (attempt === 2 || !isRetryableWriteConflict(error)) throw error
+    }
+  }
+}
 
 function serializeSession<T extends { id: string }>(session: T) {
   const { id, ...rest } = session
@@ -15,9 +46,18 @@ router.get('/sessions', async (req: Request, res: Response, next: NextFunction) 
     const sessions = await getPrisma().chatSession.findMany({
       where: { userId: req.userId! },
       orderBy: { updatedAt: 'desc' },
-      select: { id: true, title: true, createdAt: true, updatedAt: true },
+      select: {
+        id: true,
+        title: true,
+        createdAt: true,
+        updatedAt: true,
+        _count: { select: { messages: true } },
+      },
     })
-    res.json(sessions.map(serializeSession))
+    res.json(sessions.map(({ _count, ...session }) => ({
+      ...serializeSession(session),
+      messageCount: _count.messages,
+    })))
   } catch (err) {
     next(err)
   }
@@ -121,11 +161,27 @@ router.delete('/sessions/:id', async (req: Request, res: Response, next: NextFun
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { message, sessionId } = req.body
-    if (!message) {
+    if (typeof message !== 'string' || !message.trim() || message.length > 4000) {
       res.status(400).json({ error: 'Message required' })
       return
     }
-    res.json({ reply: 'Chat API connected. AI integration pending.', sessionId })
+    const prisma = getPrisma()
+    let session = sessionId
+      ? await prisma.chatSession.findFirst({
+          where: { id: sessionId, userId: req.userId! },
+          select: { id: true },
+        })
+      : null
+    if (sessionId && !session) throw new NotFoundError('ChatSession', sessionId)
+    if (!session) {
+      session = await prisma.chatSession.create({
+        data: { userId: req.userId!, title: message.trim().slice(0, 80) },
+        select: { id: true },
+      })
+    }
+    const reply = await answerUserLocally(req.userId!, message.trim())
+    await persistTurn(session.id, message.trim(), reply)
+    res.json({ reply, sessionId: session.id })
   } catch (err) {
     next(err)
   }

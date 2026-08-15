@@ -1,7 +1,12 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { Prisma } from '../generated/prisma/client.js'
 import { getPrisma } from '../lib/prisma.js'
-import { FocusPreferencesSchema, parseBody } from '../lib/validation.js'
+import {
+  FocusPreferencesSchema,
+  GettingStartedStateSchema,
+  OnboardingStateSchema,
+  parseBody,
+} from '../lib/validation.js'
 import { ValidationError, NotFoundError } from '../lib/errors.js'
 import bcryptjs from 'bcryptjs'
 import { COOKIE_NAME } from '../lib/auth.js'
@@ -15,6 +20,87 @@ function jsonObject(value: Prisma.JsonValue | null): Record<string, unknown> {
     ? value as Record<string, unknown>
     : {}
 }
+
+router.patch('/me/onboarding', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = parseBody(OnboardingStateSchema, req.body)
+    if (!parsed.success) throw new ValidationError(parsed.error)
+
+    const prisma = getPrisma()
+    const current = await prisma.user.findUnique({
+      where: { id: req.userId! },
+      select: { onboardingState: true, onboardingCompletedAt: true },
+    })
+    if (!current) throw new NotFoundError('User', req.userId!)
+
+    const {
+      name,
+      timezone,
+      completed,
+      termsAccepted,
+      termsVersion,
+      ...statePatch
+    } = parsed.data
+    const onboardingState = {
+      ...jsonObject(current.onboardingState),
+      ...statePatch,
+      ...(termsAccepted === true
+        ? { termsVersion, termsAcceptedAt: new Date().toISOString() }
+        : {}),
+      ...(completed !== undefined ? { completed } : {}),
+    }
+    const user = await prisma.user.update({
+      where: { id: req.userId! },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(timezone !== undefined ? { timezone } : {}),
+        onboardingState: onboardingState as Prisma.InputJsonValue,
+        ...(completed === true && !current.onboardingCompletedAt
+          ? { onboardingCompletedAt: new Date() }
+          : {}),
+      },
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        timezone: true,
+        onboardingState: true,
+        onboardingCompletedAt: true,
+        gettingStartedState: true,
+      },
+    })
+    res.json(user)
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.patch('/me/getting-started', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = parseBody(GettingStartedStateSchema, req.body)
+    if (!parsed.success) throw new ValidationError(parsed.error)
+
+    const prisma = getPrisma()
+    const current = await prisma.user.findUnique({
+      where: { id: req.userId! },
+      select: { gettingStartedState: true },
+    })
+    if (!current) throw new NotFoundError('User', req.userId!)
+
+    const gettingStartedState = {
+      ...jsonObject(current.gettingStartedState),
+      ...parsed.data,
+    }
+    const user = await prisma.user.update({
+      where: { id: req.userId! },
+      data: { gettingStartedState: gettingStartedState as Prisma.InputJsonValue },
+      select: { gettingStartedState: true },
+    })
+    res.json(user.gettingStartedState)
+  } catch (err) {
+    next(err)
+  }
+})
 
 router.get('/me/focus-preferences', async (req: Request, res: Response, next: NextFunction) => {
   try {
