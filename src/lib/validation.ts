@@ -214,6 +214,23 @@ export const UpdateFocusSettingsSchema = z.object({
   { message: 'at least one setting is required' }
 )
 
+export const CreateFocusPresetSchema = z.object({
+  name: z.string().min(1).max(100),
+  icon: z.string().max(10).default('🙂'),
+  mode: z.enum(['pomo', 'stopwatch']),
+  durationMinutes: z.number().int().min(1).max(180).optional(),
+}).refine(
+  (value) => value.mode === 'stopwatch' || (value.durationMinutes !== undefined && value.durationMinutes >= 1),
+  { message: 'durationMinutes is required for pomo mode' }
+)
+
+export const UpdateFocusPresetSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  icon: z.string().max(10).optional(),
+  mode: z.enum(['pomo', 'stopwatch']).optional(),
+  durationMinutes: z.number().int().min(1).max(180).optional().nullable(),
+})
+
 export const FocusDashboardQuerySchema = z.object({
   timezone: z.string().max(50).refine(isValidIanaTimeZone, 'timezone must be a valid IANA time zone').optional(),
 })

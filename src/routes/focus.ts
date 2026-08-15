@@ -6,6 +6,8 @@ import {
   CompleteActiveFocusSessionSchema,
   CreateFocusRecordSchema,
   UpdateFocusSettingsSchema,
+  CreateFocusPresetSchema,
+  UpdateFocusPresetSchema,
   FocusDashboardQuerySchema,
   FocusRecordsQuerySchema,
   FocusTargetSearchSchema,
@@ -443,6 +445,44 @@ router.patch('/settings', async (req: Request, res: Response, next: NextFunction
 
     const settings = await focusSettingsService.updateSettings(req.userId!, parsed.data)
     res.json(settings)
+  } catch (err) { next(err) }
+})
+
+// ── Custom Preset Endpoints ────────────────────────────────────────────────
+
+router.get('/presets', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const presets = await focusSettingsService.getPresets(req.userId!)
+    res.json(presets)
+  } catch (err) { next(err) }
+})
+
+router.post('/presets', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = parseBody(CreateFocusPresetSchema, req.body)
+    if (!parsed.success) throw new ValidationError(parsed.error)
+
+    const preset = await focusSettingsService.addPreset(req.userId!, parsed.data)
+    res.status(201).json(preset)
+  } catch (err) { next(err) }
+})
+
+router.patch('/presets/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = parseBody(UpdateFocusPresetSchema, req.body)
+    if (!parsed.success) throw new ValidationError(parsed.error)
+
+    const preset = await focusSettingsService.updatePreset(req.userId!, req.params.id, parsed.data as Parameters<typeof focusSettingsService.updatePreset>[2])
+    if (!preset) throw new NotFoundError('Preset', req.params.id)
+    res.json(preset)
+  } catch (err) { next(err) }
+})
+
+router.delete('/presets/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const deleted = await focusSettingsService.deletePreset(req.userId!, req.params.id)
+    if (!deleted) throw new NotFoundError('Preset', req.params.id)
+    res.status(204).send()
   } catch (err) { next(err) }
 })
 
