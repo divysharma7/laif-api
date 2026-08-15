@@ -1,4 +1,6 @@
 import { getPrisma } from '../lib/prisma.js'
+import type { Prisma } from '../generated/prisma/client.js'
+import { ValidationError } from '../lib/errors.js'
 
 interface FocusSettingsData {
   pomoDurationSeconds?: number
@@ -20,6 +22,8 @@ export interface CustomPreset {
   createdAt: string
   updatedAt: string
 }
+
+const MAX_CUSTOM_PRESETS = 50
 
 const DEFAULT_SETTINGS = {
   pomoDurationSeconds: 1500,       // 25 minutes
@@ -97,55 +101,109 @@ export async function getSettingsOrDefaults(userId: string) {
 
 export async function getPresets(userId: string): Promise<CustomPreset[]> {
   const settings = await getSettings(userId)
-  const raw = settings.customPresets
-  if (!raw) return []
-  // customPresets is stored as JSON — could be an array or a string
-  if (Array.isArray(raw)) return raw as unknown as CustomPreset[]
-  try { return JSON.parse(raw as string) as CustomPreset[] } catch { return [] }
+  return parsePresets(settings.customPresets)
 }
 
 export async function addPreset(userId: string, preset: Omit<CustomPreset, 'id' | 'createdAt' | 'updatedAt'>): Promise<CustomPreset> {
-  const prisma = getPrisma()
-  const presets = await getPresets(userId)
-  const now = new Date().toISOString()
-  const newPreset: CustomPreset = {
-    id: crypto.randomUUID(),
-    ...preset,
-    createdAt: now,
-    updatedAt: now,
-  }
-  presets.push(newPreset)
-  await prisma.focusSettings.update({
-    where: { userId },
-    data: { customPresets: JSON.stringify(presets) },
+  const result = await mutatePresets(userId, (presets) => {
+    if (presets.length >= MAX_CUSTOM_PRESETS) {
+      throw new ValidationError(`A maximum of ${MAX_CUSTOM_PRESETS} custom presets is allowed`)
+    }
+    const now = new Date().toISOString()
+    const normalizedPreset = preset.mode === 'stopwatch'
+      ? { ...preset, durationMinutes: undefined }
+      : preset
+    const newPreset: CustomPreset = {
+      id: crypto.randomUUID(),
+      ...normalizedPreset,
+      createdAt: now,
+      updatedAt: now,
+    }
+    return { value: newPreset, presets: [...presets, newPreset] }
   })
-  return newPreset
+  return result!
 }
 
 export async function updatePreset(userId: string, presetId: string, updates: Partial<Omit<CustomPreset, 'id' | 'createdAt'>> & { durationMinutes?: number | null }): Promise<CustomPreset | null> {
-  const prisma = getPrisma()
-  const presets = await getPresets(userId)
-  const index = presets.findIndex((p) => p.id === presetId)
-  if (index === -1) return null
-  // Normalize: null durationMinutes → undefined
-  const normalized = { ...updates }
-  if (normalized.durationMinutes === null) normalized.durationMinutes = undefined
-  presets[index] = { ...presets[index], ...normalized, updatedAt: new Date().toISOString() }
-  await prisma.focusSettings.update({
-    where: { userId },
-    data: { customPresets: JSON.stringify(presets) },
+  return mutatePresets(userId, (presets) => {
+    const index = presets.findIndex((preset) => preset.id === presetId)
+    if (index === -1) return null
+
+    const current = presets[index]
+    const next: CustomPreset = {
+      ...current,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    } as CustomPreset
+    if (updates.durationMinutes === null || next.mode === 'stopwatch') {
+      delete next.durationMinutes
+    }
+    if (next.mode === 'pomo' && next.durationMinutes === undefined) {
+      throw new ValidationError('durationMinutes is required for pomo mode')
+    }
+
+    const nextPresets = [...presets]
+    nextPresets[index] = next
+    return { value: next, presets: nextPresets }
   })
-  return presets[index]
 }
 
 export async function deletePreset(userId: string, presetId: string): Promise<boolean> {
-  const prisma = getPrisma()
-  const presets = await getPresets(userId)
-  const filtered = presets.filter((p) => p.id !== presetId)
-  if (filtered.length === presets.length) return false
-  await prisma.focusSettings.update({
-    where: { userId },
-    data: { customPresets: JSON.stringify(filtered) },
+  const result = await mutatePresets(userId, (presets) => {
+    const filtered = presets.filter((preset) => preset.id !== presetId)
+    if (filtered.length === presets.length) return null
+    return { value: true, presets: filtered }
   })
-  return true
+  return result ?? false
+}
+
+function parsePresets(raw: unknown): CustomPreset[] {
+  if (!raw) return []
+  if (Array.isArray(raw)) return raw as CustomPreset[]
+  if (typeof raw !== 'string') return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    return Array.isArray(parsed) ? parsed as CustomPreset[] : []
+  } catch {
+    return []
+  }
+}
+
+function presetsJson(presets: CustomPreset[]): Prisma.InputJsonValue {
+  return presets.map(({ durationMinutes, ...preset }) => ({
+    ...preset,
+    ...(durationMinutes !== undefined ? { durationMinutes } : {}),
+  })) as Prisma.InputJsonValue
+}
+
+function isTransactionConflict(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && (error as { code?: string }).code === 'P2034')
+}
+
+async function mutatePresets<T>(
+  userId: string,
+  mutate: (presets: CustomPreset[]) => { value: T; presets: CustomPreset[] } | null,
+): Promise<T | null> {
+  const prisma = getPrisma()
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const settings = await tx.focusSettings.upsert({
+          where: { userId },
+          update: {},
+          create: { userId, ...DEFAULT_SETTINGS },
+        })
+        const result = mutate(parsePresets(settings.customPresets))
+        if (!result) return null
+        await tx.focusSettings.update({
+          where: { userId },
+          data: { customPresets: presetsJson(result.presets) },
+        })
+        return result.value
+      }, { isolationLevel: 'Serializable' })
+    } catch (error) {
+      if (!isTransactionConflict(error) || attempt === 2) throw error
+    }
+  }
+  return null
 }

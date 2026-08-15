@@ -28,7 +28,7 @@ npx prisma validate
 npm run security:secrets
 ```
 
-Current verified baseline: TypeScript clean, Prisma valid, secret scan clean, and 149/149 tests passing.
+Current verified baseline: TypeScript clean, Prisma valid, secret scan clean, and 153/153 tests passing.
 
 ## Mobile-facing additions
 

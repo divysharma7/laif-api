@@ -215,7 +215,7 @@ export const UpdateFocusSettingsSchema = z.object({
 )
 
 export const CreateFocusPresetSchema = z.object({
-  name: z.string().min(1).max(100),
+  name: z.string().trim().min(1).max(100),
   icon: z.string().max(10).default('🙂'),
   mode: z.enum(['pomo', 'stopwatch']),
   durationMinutes: z.number().int().min(1).max(180).optional(),
@@ -225,11 +225,14 @@ export const CreateFocusPresetSchema = z.object({
 )
 
 export const UpdateFocusPresetSchema = z.object({
-  name: z.string().min(1).max(100).optional(),
+  name: z.string().trim().min(1).max(100).optional(),
   icon: z.string().max(10).optional(),
   mode: z.enum(['pomo', 'stopwatch']).optional(),
   durationMinutes: z.number().int().min(1).max(180).optional().nullable(),
-})
+}).refine(
+  (value) => Object.values(value).some((field) => field !== undefined),
+  { message: 'at least one preset field is required' },
+)
 
 export const FocusDashboardQuerySchema = z.object({
   timezone: z.string().max(50).refine(isValidIanaTimeZone, 'timezone must be a valid IANA time zone').optional(),
